@@ -1,22 +1,87 @@
 const axios = require('axios');
 const config = require('../config/config');
 const database = require('./database');
+const fs = require('fs');
+const path = require('path');
 
 class ConversationAnalyzer {
     constructor() {
         this.apiKey = config.deepseekApiKey;
         this.apiUrl = config.deepseekApiUrl;
+        this.advisorsProfiles = null;
+        this.loadAdvisorsProfiles();
+    }
+
+    loadAdvisorsProfiles() {
+        try {
+            const profilesPath = path.join(__dirname, '../../data/advisors-profiles.json');
+            const data = fs.readFileSync(profilesPath, 'utf8');
+            this.advisorsProfiles = JSON.parse(data).perfiles_de_asesores;
+            console.log(`[ConversationAnalyzer] Cargados ${this.advisorsProfiles.length} perfiles de asesores`);
+        } catch (error) {
+            console.error('[ConversationAnalyzer] Error cargando perfiles de asesores:', error);
+            this.advisorsProfiles = [];
+        }
+    }
+
+    findBestAdvisor(conversationText) {
+        if (!this.advisorsProfiles || this.advisorsProfiles.length === 0) {
+            this.loadAdvisorsProfiles();
+        }
+
+        const text = conversationText.toLowerCase();
+        let bestAdvisor = null;
+        let highestScore = 0;
+
+        for (const advisor of this.advisorsProfiles) {
+            let score = 0;
+
+            // Revisar palabras clave
+            if (advisor.palabras_clave) {
+                for (const keyword of advisor.palabras_clave) {
+                    if (text.includes(keyword.toLowerCase())) {
+                        score += 2;
+                    }
+                }
+            }
+
+            // Revisar especialidades (mayor peso)
+            for (const specialty of advisor.especialidades) {
+                const specialtyWords = specialty.toLowerCase().split(' ');
+                for (const word of specialtyWords) {
+                    if (word.length > 3 && text.includes(word)) {
+                        score += 3;
+                    }
+                }
+            }
+
+            if (score > highestScore) {
+                highestScore = score;
+                bestAdvisor = advisor;
+            }
+        }
+
+        // Si no hay match claro, asignar Percy Babb (asesor general)
+        if (!bestAdvisor || highestScore < 3) {
+            bestAdvisor = this.advisorsProfiles.find(a => a.id === 'asesor_001') || this.advisorsProfiles[0];
+        }
+
+        console.log(`[ConversationAnalyzer] Asesor seleccionado: ${bestAdvisor.nombre} (puntaje: ${highestScore})`);
+        return bestAdvisor;
     }
 
     async analyzeConversation(messages, userId = null) {
         try {
             // Preparar el contexto de la conversación
             const conversationText = messages.map(msg => {
-                const type = msg.type === 'USER' ? 'Cliente' : 
-                           msg.type === 'BOT' ? 'Asistente' : 
+                const type = msg.type === 'USER' ? 'Cliente' :
+                           msg.type === 'BOT' ? 'Asistente' :
                            msg.type === 'HUMAN' ? 'Soporte' : 'Sistema';
                 return `${type}: ${msg.message}`;
             }).join('\n');
+
+            // Encontrar el mejor asesor para esta conversación
+            const assignedAdvisor = this.findBestAdvisor(conversationText);
 
             const analysisPrompt = `Analiza la siguiente conversación y determina:
 1. ¿Es una POSIBLE VENTA? (el cliente muestra interés en comprar o solicita precios/información de productos)
@@ -79,7 +144,12 @@ Responde ÚNICAMENTE con un JSON en este formato exacto:
                     issues_detected: Array.isArray(analysis.issues_detected) ? analysis.issues_detected : [],
                     recommendations: Array.isArray(analysis.recommendations) ? analysis.recommendations : [],
                     satisfaction_score: parseFloat(analysis.satisfaction_score) || 5.0,
-                    keywords: Array.isArray(analysis.keywords) ? analysis.keywords : []
+                    keywords: Array.isArray(analysis.keywords) ? analysis.keywords : [],
+                    asesor_asignado: {
+                        id: assignedAdvisor.id,
+                        nombre: assignedAdvisor.nombre,
+                        especialidades: assignedAdvisor.especialidades
+                    }
                 };
 
                 // Guardar análisis en base de datos
@@ -105,12 +175,15 @@ Responde ÚNICAMENTE con un JSON en este formato exacto:
     // Análisis básico basado en palabras clave (fallback)
     async basicAnalysis(input, userId = null) {
         let text = '';
-        
+
         if (typeof input === 'string') {
             text = input.toLowerCase();
         } else if (Array.isArray(input)) {
             text = input.map(msg => msg.message || '').join(' ').toLowerCase();
         }
+
+        // Encontrar el mejor asesor para este texto
+        const assignedAdvisor = this.findBestAdvisor(text);
 
         // Palabras clave para análisis
         const positiveWords = ['gracias', 'excelente', 'perfecto', 'bueno', 'satisfecho', 'contento'];
@@ -158,7 +231,12 @@ Responde ÚNICAMENTE con un JSON en este formato exacto:
             issues_detected: sentiment === 'negativo' ? ['insatisfacción_detectada'] : [],
             recommendations: ['mejorar_análisis_con_ia'],
             satisfaction_score: score,
-            keywords: text.split(' ').slice(0, 5)
+            keywords: text.split(' ').slice(0, 5),
+            asesor_asignado: {
+                id: assignedAdvisor.id,
+                nombre: assignedAdvisor.nombre,
+                especialidades: assignedAdvisor.especialidades
+            }
         };
 
         // Guardar análisis en base de datos

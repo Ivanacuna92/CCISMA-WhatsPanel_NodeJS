@@ -8,6 +8,7 @@ const aiService = require('../services/aiService');
 const sessionManager = require('../services/sessionManager');
 const promptLoader = require('../services/promptLoader');
 const humanModeManager = require('../services/humanModeManager');
+const conversationAnalyzer = require('../services/conversationAnalyzer');
 
 class WhatsAppBot {
     constructor() {
@@ -205,32 +206,61 @@ class WhatsAppBot {
     async processMessage(userId, userMessage, chatId) {
         // Agregar mensaje del usuario a la sesión
         await sessionManager.addMessage(userId, 'user', userMessage, chatId);
-        
+
+        // Obtener historial para análisis
+        const conversationHistory = await sessionManager.getMessages(userId, chatId);
+
+        // Analizar conversación y obtener asesor asignado
+        let asesorAsignado = null;
+        try {
+            const analysis = await conversationAnalyzer.analyzeConversation(
+                conversationHistory.map(msg => ({
+                    type: msg.role === 'user' ? 'USER' : 'BOT',
+                    message: msg.content
+                })),
+                userId
+            );
+            asesorAsignado = analysis.asesor_asignado;
+            console.log(`[Bot] Asesor asignado para ${userId}: ${asesorAsignado.nombre}`);
+        } catch (error) {
+            console.error('[Bot] Error analizando conversación:', error);
+        }
+
         // Preparar mensajes para la IA
         const messages = [
             { role: 'system', content: this.systemPrompt },
-            ...(await sessionManager.getMessages(userId, chatId))
+            ...conversationHistory
         ];
-        
+
         // Generar respuesta con IA
         const aiResponse = await aiService.generateResponse(messages);
-        
+
         // Verificar si la respuesta contiene el marcador de activar soporte
         if (aiResponse.includes('{{ACTIVAR_SOPORTE}}')) {
             // Remover el marcador de la respuesta
             const cleanResponse = aiResponse.replace('{{ACTIVAR_SOPORTE}}', '').trim();
-            
+
             // Activar modo soporte
             await humanModeManager.setMode(userId, 'support');
             await sessionManager.updateSessionMode(userId, chatId, 'support');
-            
-            // Agregar respuesta limpia a la sesión
-            await sessionManager.addMessage(userId, 'assistant', cleanResponse, chatId);
-            
-            // Registrar en logs
-            await logger.log('SYSTEM', `Modo SOPORTE activado automáticamente para ${userId}`);
-            
-            return cleanResponse;
+
+            // Incluir información del asesor asignado
+            let finalResponse = cleanResponse;
+            if (asesorAsignado) {
+                finalResponse += `\n\n📋 *Asesor asignado:* ${asesorAsignado.nombre}\n` +
+                    `_Especialidad: ${asesorAsignado.especialidades.join(', ')}_`;
+            }
+
+            // Agregar respuesta con información del asesor
+            await sessionManager.addMessage(userId, 'assistant', finalResponse, chatId);
+
+            // Registrar en logs con el asesor asignado
+            const logMessage = asesorAsignado ?
+                `Modo SOPORTE activado para ${userId} - Asesor: ${asesorAsignado.nombre}` :
+                `Modo SOPORTE activado automáticamente para ${userId}`;
+            await logger.log('SYSTEM', logMessage);
+
+            return finalResponse;
         }
         
         // Agregar respuesta de IA a la sesión

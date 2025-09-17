@@ -773,13 +773,13 @@ class WebServer {
         // API endpoint para analizar conversación con IA
         this.app.post('/api/analyze-conversation', async (req, res) => {
             try {
-                const { messages } = req.body;
-                
+                const { messages, userId } = req.body;
+
                 if (!messages || !Array.isArray(messages)) {
                     return res.status(400).json({ error: 'Se requiere un array de mensajes' });
                 }
-                
-                const analysis = await conversationAnalyzer.analyzeConversation(messages);
+
+                const analysis = await conversationAnalyzer.analyzeConversation(messages, userId);
                 res.json(analysis);
             } catch (error) {
                 console.error('Error analizando conversación:', error);
