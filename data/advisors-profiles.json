@@ -12,7 +12,7 @@
       "palabras_clave": [
         "ubicación", "localización", "zona", "área", "vecinos", "empresas",
         "información", "técnico", "industrial", "desarrollo", "potencial",
-        "crecimiento", "inversión", "respaldo", "círculo"
+        "crecimiento", "respaldo", "círculo","equipamiento"
       ],
       "descripcion": "Asesor conversacional que mantiene un tono formal pero enfocado en construir relaciones sólidas. Transmite que invertir en Navetec es entrar a un círculo de crecimiento y respaldo. Ideal para leads que preguntan sobre la ubicación, información técnica, empresas vecinas o el potencial de desarrollo de la zona."
     },
@@ -26,43 +26,11 @@
         "datos duros"
       ],
       "palabras_clave": [
-        "financiero", "proyección", "rendimiento", "ROI", "inversión",
+        "financiero", "proyección", "rendimiento", "ROI", "inversión", "precios", "plusvalia",
         "retorno", "números", "datos", "análisis", "comparativa",
         "calculado", "rentabilidad", "ganancia", "porcentaje", "tasa"
       ],
       "descripcion": "Perfil financiero que comunica de forma técnica, estructurada y precisa. Enfocado en dar respuestas rápidas y claras sobre el rendimiento de la inversión. Su rol es atender a inversionistas que buscan datos duros, comparativas y proyecciones para tomar decisiones calculadas."
-    },
-    {
-      "id": "asesor_003",
-      "nombre": "Noemí Ronquillo",
-      "especialidades": [
-        "conexión emocional",
-        "calidad de vida",
-        "comunidad",
-        "seguridad"
-      ],
-      "palabras_clave": [
-        "vida", "calidad", "comunidad", "seguridad", "amenidades",
-        "familia", "tranquilidad", "bienestar", "ambiente", "convivencia",
-        "servicios", "comodidad", "experiencia", "confianza"
-      ],
-      "descripcion": "Asesora que conecta desde lo emocional. Su estilo de comunicación es cálido, cercano y empático, ideal para clientes que preguntan por amenidades, vida en comunidad o la calidad de vida. Noemí convierte la conversación en una experiencia humana, generando confianza y motivación."
-    },
-    {
-      "id": "asesor_004",
-      "nombre": "Blanca Pichardo",
-      "especialidades": [
-        "análisis numérico",
-        "financiamiento",
-        "plusvalía",
-        "proyecciones de inversión"
-      ],
-      "palabras_clave": [
-        "financiamiento", "mensualidad", "plazo", "crédito", "préstamo",
-        "plusvalía", "pago", "enganche", "interés", "plan", "esquema",
-        "cuota", "precio", "costo", "presupuesto", "cotización"
-      ],
-      "descripcion": "Asesora orientada a los datos. Su perfil es numérico y racional, ideal para atender preguntas financieras concretas. Es clara, directa y transmite seguridad al explicar temas como mensualidades, planes de financiamiento y rendimientos. Su enfoque permite que el prospecto vea el terreno como una inversión rentable y con certeza financiera."
     }
   ],
   "configuracion": {
