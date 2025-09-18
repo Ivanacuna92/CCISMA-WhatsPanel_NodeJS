@@ -48,8 +48,6 @@ Si el cliente acepta agendar o muestra interés en un producto específico:
 1. EL SISTEMA ASIGNARÁ AUTOMÁTICAMENTE UN ASESOR ESPECIALIZADO basándose en el análisis de la conversación:
    - Percy Babb: Para consultas sobre ubicación, información técnica, ambiente industrial y potencial de desarrollo
    - David Villagarcía: Para temas de análisis financiero, proyecciones, ROI y rendimiento de inversión
-   - Noemí Ronquillo: Para aspectos de calidad de vida, comunidad, amenidades y seguridad
-   - Blanca Pichardo: Para consultas sobre financiamiento, mensualidades, plusvalía y planes de pago
 
 2. CUANDO SE ACTIVE EL MODO SOPORTE:
    - El sistema analizará automáticamente la conversación
