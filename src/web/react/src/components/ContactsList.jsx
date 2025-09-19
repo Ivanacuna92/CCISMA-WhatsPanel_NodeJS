@@ -54,7 +54,14 @@ function ContactsList({ contacts, setContacts, selectedContact, onSelectContact 
   };
 
   const filteredContacts = contacts
-    .filter(contact => contact.phone.toLowerCase().includes(searchTerm.toLowerCase()))
+    .filter(contact => {
+      const searchFields = [
+        contact.phone,
+        contact.name || '',
+        contact.email || ''
+      ].join(' ').toLowerCase();
+      return searchFields.includes(searchTerm.toLowerCase());
+    })
     .sort((a, b) => {
       // Primero los de soporte (prioridad máxima)
       if (a.mode === 'support' && b.mode !== 'support') return -1;
@@ -113,7 +120,12 @@ function ContactsList({ contacts, setContacts, selectedContact, onSelectContact 
                     backgroundColor: contact.mode === 'support' ? '#EA580C' : '#00567D' 
                   }}
                 >
-                  {contact.mode === 'support' ? '👤' : contact.phone.slice(-2)}
+                  {contact.mode === 'support'
+                    ? '👤'
+                    : contact.name
+                      ? contact.name.charAt(0).toUpperCase()
+                      : contact.phone.slice(-2)
+                  }
                 </div>
                 {contact.mode === 'support' && (
                   <div className="absolute -top-1 -right-1 w-2 h-2 bg-orange-600 rounded-full animate-pulse"></div>
@@ -122,14 +134,31 @@ function ContactsList({ contacts, setContacts, selectedContact, onSelectContact 
               <div className="flex-1">
                 <div className="flex items-center gap-2">
                   <div className={`font-medium ${contact.mode === 'support' ? 'text-orange-700' : 'text-navetec-primary'}`}>
-                    {contact.phone}
+                    {contact.name || contact.phone}
                   </div>
                   {contact.mode === 'support' && (
                     <span className="text-xs bg-orange-600 text-white px-2 py-0.5 rounded">
                       Soporte
                     </span>
                   )}
+                  {contact.dataCollected && (
+                    <span className="text-xs bg-green-600 text-white px-2 py-0.5 rounded">
+                      ✓
+                    </span>
+                  )}
                 </div>
+
+                {/* Línea de información del contacto */}
+                <div className={`text-xs ${contact.mode === 'support' ? 'text-orange-600' : 'text-gray-500'}`}>
+                  {contact.name && contact.phone !== contact.name && (
+                    <div className="truncate">{contact.phone}</div>
+                  )}
+                  {contact.email && (
+                    <div className="truncate">{contact.email}</div>
+                  )}
+                </div>
+
+                {/* Último mensaje */}
                 <div className={`text-sm truncate ${contact.mode === 'support' ? 'text-orange-600' : 'text-gray-500'}`}>
                   {contact.lastMessage?.text.substring(0, 30)}...
                 </div>

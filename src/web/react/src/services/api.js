@@ -80,12 +80,22 @@ export async function fetchContacts() {
       throw new Error('Error fetching logs');
     }
     const logs = await logsResponse.json();
-    
+
     const humanStatesResponse = await fetchWithCredentials(`${API_BASE}/human-states`);
     const humanStates = humanStatesResponse.ok ? await humanStatesResponse.json() : {};
-    
-    const processedContacts = processContactsFromLogs(logs, humanStates);
-    
+
+    // Obtener datos de usuario
+    const userDataResponse = await fetchWithCredentials(`${API_BASE}/user-data`);
+    const usersData = userDataResponse.ok ? await userDataResponse.json() : [];
+
+    // Crear un mapa de datos de usuario para acceso rápido
+    const userDataMap = {};
+    usersData.forEach(userData => {
+      userDataMap[userData.userId] = userData;
+    });
+
+    const processedContacts = processContactsFromLogs(logs, humanStates, userDataMap);
+
     return processedContacts;
   } catch (error) {
     // Error silencioso
@@ -136,7 +146,7 @@ export async function endConversation(phone) {
   return response.json();
 }
 
-function processContactsFromLogs(logs, humanStates) {
+function processContactsFromLogs(logs, humanStates, userDataMap = {}) {
   const contacts = {};
   
   const filteredLogs = logs.filter(log => {
@@ -168,8 +178,14 @@ function processContactsFromLogs(logs, humanStates) {
         isHumanMode = true;
       }
       
+      // Obtener datos del usuario si están disponibles
+      const userData = userDataMap[phone] || {};
+
       contacts[phone] = {
         phone: phone,
+        name: userData.name || null,
+        email: userData.email || null,
+        dataCollected: userData.dataCollected || false,
         messages: [],
         totalMessages: 0,
         userMessages: 0,
@@ -270,6 +286,31 @@ export async function analyzeConversation(messages) {
     throw new Error('Error al analizar conversación');
   }
   
+  return response.json();
+}
+
+// ===== FUNCIONES DE GESTIÓN DE DATOS DE USUARIO =====
+
+export async function getUserData() {
+  const response = await fetchWithCredentials(`${API_BASE}/user-data`);
+
+  if (!response.ok) {
+    throw new Error('Error al obtener datos de usuarios');
+  }
+
+  return response.json();
+}
+
+export async function getUserDataById(userId) {
+  const response = await fetchWithCredentials(`${API_BASE}/user-data/${userId}`);
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      return null;
+    }
+    throw new Error('Error al obtener datos del usuario');
+  }
+
   return response.json();
 }
 

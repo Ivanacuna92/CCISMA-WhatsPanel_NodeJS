@@ -9,6 +9,7 @@ const salesManager = require('../services/salesManager');
 const conversationAnalyzer = require('../services/conversationAnalyzer');
 const authService = require('../services/authService');
 const csvService = require('../services/csvService');
+const userDataManager = require('../services/userDataManager');
 const { requireAuth, requireAdmin, requireSupportOrAdmin } = require('../middleware/auth');
 const ViteExpress = require('vite-express');
 
@@ -784,6 +785,67 @@ class WebServer {
             } catch (error) {
                 console.error('Error analizando conversación:', error);
                 res.status(500).json({ error: 'Error interno del servidor' });
+            }
+        });
+
+        // ===== ENDPOINTS DE GESTIÓN DE DATOS DE USUARIO =====
+
+        // API endpoint para obtener datos de usuarios
+        this.app.get('/api/user-data', async (req, res) => {
+            try {
+                const users = await userDataManager.getAllUsersData();
+                res.json(users);
+            } catch (error) {
+                console.error('Error obteniendo datos de usuarios:', error);
+                res.status(500).json({ error: 'Error obteniendo datos de usuarios' });
+            }
+        });
+
+        // API endpoint para obtener datos de un usuario específico
+        this.app.get('/api/user-data/:userId', async (req, res) => {
+            try {
+                const { userId } = req.params;
+                const userData = await userDataManager.getUserData(userId);
+
+                if (userData) {
+                    res.json(userData);
+                } else {
+                    res.status(404).json({ error: 'Usuario no encontrado' });
+                }
+            } catch (error) {
+                console.error('Error obteniendo datos del usuario:', error);
+                res.status(500).json({ error: 'Error obteniendo datos del usuario' });
+            }
+        });
+
+        // API endpoint para actualizar datos de usuario (solo admin)
+        this.app.put('/api/user-data/:userId', requireAdmin, async (req, res) => {
+            try {
+                const { userId } = req.params;
+                const { name, email } = req.body;
+
+                const updatedData = await userDataManager.setUserData(userId, { name, email });
+                res.json(updatedData);
+            } catch (error) {
+                console.error('Error actualizando datos del usuario:', error);
+                res.status(500).json({ error: 'Error actualizando datos del usuario' });
+            }
+        });
+
+        // API endpoint para eliminar datos de usuario (solo admin)
+        this.app.delete('/api/user-data/:userId', requireAdmin, async (req, res) => {
+            try {
+                const { userId } = req.params;
+                const success = await userDataManager.deleteUserData(userId);
+
+                if (success) {
+                    res.json({ success: true, message: 'Datos de usuario eliminados' });
+                } else {
+                    res.status(500).json({ error: 'Error eliminando datos del usuario' });
+                }
+            } catch (error) {
+                console.error('Error eliminando datos del usuario:', error);
+                res.status(500).json({ error: 'Error eliminando datos del usuario' });
             }
         });
 

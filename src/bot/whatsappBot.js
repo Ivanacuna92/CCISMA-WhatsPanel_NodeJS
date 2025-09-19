@@ -9,6 +9,7 @@ const sessionManager = require('../services/sessionManager');
 const promptLoader = require('../services/promptLoader');
 const humanModeManager = require('../services/humanModeManager');
 const conversationAnalyzer = require('../services/conversationAnalyzer');
+const userDataManager = require('../services/userDataManager');
 
 class WhatsAppBot {
     constructor() {
@@ -204,6 +205,16 @@ class WhatsAppBot {
     }
     
     async processMessage(userId, userMessage, chatId) {
+        // Verificar si necesitamos recolectar datos del usuario
+        const dataCollectionState = userDataManager.getDataCollectionState(userId);
+
+        if (dataCollectionState !== 'completed') {
+            const response = await this.handleDataCollection(userId, userMessage, dataCollectionState);
+            if (response) {
+                return response;
+            }
+        }
+
         // Agregar mensaje del usuario a la sesión
         await sessionManager.addMessage(userId, 'user', userMessage, chatId);
 
@@ -314,7 +325,7 @@ class WhatsAppBot {
         try {
             this.reconnectAttempts = 0;
             this.isReconnecting = false;
-            
+
             if (this.sock) {
                 try {
                     await this.sock.logout();
@@ -322,9 +333,9 @@ class WhatsAppBot {
                     console.log('Error al hacer logout:', err.message);
                 }
             }
-            
+
             await this.clearSession();
-            
+
             // Reiniciar el bot para generar nuevo QR
             setTimeout(() => this.start(), 2000);
             return true;
@@ -332,6 +343,53 @@ class WhatsAppBot {
             console.error('Error al cerrar sesión:', error);
             return false;
         }
+    }
+
+    async handleDataCollection(userId, userMessage, state) {
+        const userData = await userDataManager.getUserData(userId);
+
+        switch (state) {
+            case 'none':
+            case 'name_pending':
+                // Solicitar nombre
+                if (!userData || !userData.name) {
+                    if (state === 'none') {
+                        // Primera vez, dar bienvenida y solicitar nombre
+                        const welcomeMessage = `¡Hola! 👋 Bienvenido a nuestro servicio de atención.\n\nPara brindarte una mejor experiencia personalizada, me gustaría conocerte un poco mejor.\n\n¿Podrías decirme tu nombre completo por favor?`;
+                        await userDataManager.setUserData(userId, {});
+                        return welcomeMessage;
+                    } else {
+                        // Validar y guardar nombre
+                        const name = userMessage.trim();
+                        if (userDataManager.isValidName(name)) {
+                            await userDataManager.setUserData(userId, { name: name });
+                            return `¡Mucho gusto, ${name}! 😊\n\nAhora, ¿podrías proporcionarme tu correo electrónico? Esto nos ayudará a enviarte información relevante y mantener un mejor seguimiento de nuestra conversación.`;
+                        } else {
+                            return `Por favor, ingresa un nombre válido (solo letras y espacios, mínimo 2 caracteres). ¿Cuál es tu nombre completo?`;
+                        }
+                    }
+                }
+                break;
+
+            case 'email_pending':
+                // Validar y guardar email
+                const email = userMessage.trim().toLowerCase();
+                if (userDataManager.isValidEmail(email)) {
+                    await userDataManager.setUserData(userId, { email: email });
+                    await userDataManager.markDataAsCollected(userId);
+                    const currentUserData = await userDataManager.getUserData(userId);
+                    return `¡Perfecto, ${currentUserData.name}! ✅\n\nHe registrado tu información:\n📧 **Email:** ${email}\n\nYa estamos listos para comenzar. ¿En qué puedo ayudarte hoy?`;
+                } else {
+                    return `Por favor, ingresa un correo electrónico válido (ejemplo: tucorreo@ejemplo.com):`;
+                }
+
+            case 'validation_pending':
+                // Esto no debería pasar normalmente, pero por si acaso
+                await userDataManager.markDataAsCollected(userId);
+                return null; // Continuar con el flujo normal
+        }
+
+        return null; // Continuar con el flujo normal
     }
 }
 
