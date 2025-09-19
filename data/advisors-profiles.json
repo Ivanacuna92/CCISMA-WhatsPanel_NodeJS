@@ -10,9 +10,8 @@
         "potencial de desarrollo"
       ],
       "palabras_clave": [
-        "ubicación", "localización", "zona", "área", "vecinos", "empresas",
-        "información", "técnico", "industrial", "desarrollo", "potencial",
-        "crecimiento", "respaldo", "círculo","equipamiento"
+        "ubicación", "localización", "vecinos", "empresas",
+        "industrial", "desarrollo", "equipamiento"
       ],
       "descripcion": "Asesor conversacional que mantiene un tono formal pero enfocado en construir relaciones sólidas. Transmite que invertir en Navetec es entrar a un círculo de crecimiento y respaldo. Ideal para leads que preguntan sobre la ubicación, información técnica, empresas vecinas o el potencial de desarrollo de la zona."
     },
@@ -26,9 +25,8 @@
         "datos duros"
       ],
       "palabras_clave": [
-        "financiero", "proyección", "rendimiento", "ROI", "inversión", "precios", "plusvalia",
-        "retorno", "números", "datos", "análisis", "comparativa",
-        "calculado", "rentabilidad", "ganancia", "porcentaje", "tasa"
+        "precio", "costo", "inversión", "rendimiento",
+        "rentabilidad", "ganancia", "plusvalía"
       ],
       "descripcion": "Perfil financiero que comunica de forma técnica, estructurada y precisa. Enfocado en dar respuestas rápidas y claras sobre el rendimiento de la inversión. Su rol es atender a inversionistas que buscan datos duros, comparativas y proyecciones para tomar decisiones calculadas."
     }

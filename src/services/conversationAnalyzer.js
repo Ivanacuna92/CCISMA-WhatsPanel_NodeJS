@@ -30,30 +30,99 @@ class ConversationAnalyzer {
         }
 
         const text = conversationText.toLowerCase();
+
         let bestAdvisor = null;
         let highestScore = 0;
+        const scores = [];
 
         for (const advisor of this.advisorsProfiles) {
             let score = 0;
+            let matchDetails = [];
 
-            // Revisar palabras clave
+            // 1. Búsqueda de palabras clave con diferentes pesos
             if (advisor.palabras_clave) {
                 for (const keyword of advisor.palabras_clave) {
-                    if (text.includes(keyword.toLowerCase())) {
-                        score += 2;
+                    const keywordLower = keyword.toLowerCase();
+
+                    // Búsqueda exacta de la palabra completa (mayor peso)
+                    const regex = new RegExp(`\\b${keywordLower}\\b`, 'g');
+                    const exactMatches = (text.match(regex) || []).length;
+                    if (exactMatches > 0) {
+                        const weight = 5;
+                        score += weight * exactMatches;
+                        matchDetails.push(`Palabra exacta "${keyword}": +${weight * exactMatches}`);
+                    }
+
+                    // Búsqueda parcial (menor peso)
+                    else if (text.includes(keywordLower)) {
+                        const weight = 2;
+                        score += weight;
+                        matchDetails.push(`Palabra parcial "${keyword}": +${weight}`);
+                    }
+
+                    // Búsqueda de raíz de palabra (para variaciones)
+                    const keywordRoot = keywordLower.slice(0, Math.max(4, keywordLower.length - 2));
+                    if (keywordRoot.length >= 4) {
+                        const rootRegex = new RegExp(`\\b${keywordRoot}`, 'g');
+                        const rootMatches = (text.match(rootRegex) || []).length;
+                        if (rootMatches > 0 && !text.includes(keywordLower)) {
+                            const weight = 1;
+                            score += weight;
+                            matchDetails.push(`Raíz "${keywordRoot}": +${weight}`);
+                        }
                     }
                 }
             }
 
-            // Revisar especialidades (mayor peso)
+            // 2. Búsqueda de especialidades con análisis de frases completas
             for (const specialty of advisor.especialidades) {
-                const specialtyWords = specialty.toLowerCase().split(' ');
-                for (const word of specialtyWords) {
-                    if (word.length > 3 && text.includes(word)) {
-                        score += 3;
+                const specialtyLower = specialty.toLowerCase();
+
+                // Búsqueda de frase completa (máximo peso)
+                if (text.includes(specialtyLower)) {
+                    const weight = 10;
+                    score += weight;
+                    matchDetails.push(`Especialidad completa "${specialty}": +${weight}`);
+                } else {
+                    // Búsqueda de palabras individuales de la especialidad
+                    const specialtyWords = specialtyLower.split(' ').filter(w => w.length > 3);
+                    let matchedWords = 0;
+
+                    for (const word of specialtyWords) {
+                        const wordRegex = new RegExp(`\\b${word}\\b`, 'g');
+                        if (wordRegex.test(text)) {
+                            matchedWords++;
+                        }
+                    }
+
+                    // Si coinciden todas las palabras de la especialidad (aunque no estén juntas)
+                    if (specialtyWords.length > 0 && matchedWords === specialtyWords.length) {
+                        const weight = 7;
+                        score += weight;
+                        matchDetails.push(`Todas palabras de "${specialty}": +${weight}`);
+                    }
+                    // Si coinciden algunas palabras
+                    else if (matchedWords > 0) {
+                        const weight = 3 * (matchedWords / specialtyWords.length);
+                        score += weight;
+                        matchDetails.push(`${matchedWords}/${specialtyWords.length} palabras de "${specialty}": +${weight.toFixed(1)}`);
                     }
                 }
             }
+
+            // 3. Análisis de contexto y términos relacionados
+            const contextBonus = this.analyzeContext(text, advisor);
+            if (contextBonus > 0) {
+                score += contextBonus;
+                matchDetails.push(`Bonus contexto: +${contextBonus}`);
+            }
+
+            // Guardar información de scoring para debug
+            scores.push({
+                advisor: advisor.nombre,
+                score: score,
+                details: matchDetails
+            });
 
             if (score > highestScore) {
                 highestScore = score;
@@ -61,13 +130,57 @@ class ConversationAnalyzer {
             }
         }
 
-        // Si no hay match claro, asignar Percy Babb (asesor general)
-        if (!bestAdvisor || highestScore < 3) {
+        // Logging detallado para debug
+        console.log('[ConversationAnalyzer] === Análisis de asignación de asesor ===');
+        console.log(`Texto analizado (primeros 200 chars): "${text.substring(0, 200)}..."`);
+        scores.forEach(s => {
+            console.log(`\n${s.advisor}: Puntaje total = ${s.score}`);
+            s.details.forEach(d => console.log(`  - ${d}`));
+        });
+
+        // Umbral dinámico basado en la longitud del texto
+        const minThreshold = text.length > 50 ? 5 : 3;
+
+        // Si no hay match claro o el puntaje es muy bajo, asignar asesor por defecto
+        if (!bestAdvisor || highestScore < minThreshold) {
             bestAdvisor = this.advisorsProfiles.find(a => a.id === 'asesor_001') || this.advisorsProfiles[0];
+            console.log(`[ConversationAnalyzer] Puntaje insuficiente (${highestScore} < ${minThreshold}), asignando asesor por defecto: ${bestAdvisor.nombre}`);
+        } else {
+            console.log(`[ConversationAnalyzer] ✓ Asesor seleccionado: ${bestAdvisor.nombre} (puntaje: ${highestScore})`);
         }
 
-        console.log(`[ConversationAnalyzer] Asesor seleccionado: ${bestAdvisor.nombre} (puntaje: ${highestScore})`);
         return bestAdvisor;
+    }
+
+    // Método auxiliar para analizar contexto y términos relacionados
+    analyzeContext(text, advisor) {
+        let contextScore = 0;
+
+        // Términos relacionados por perfil
+        const relatedTerms = {
+            'asesor_001': {
+                terms: ['dónde', 'donde', 'dirección', 'mapa', 'cerca', 'lejos', 'distancia',
+                       'alrededor', 'industria', 'parque', 'nave', 'bodega', 'espacio'],
+                weight: 2
+            },
+            'asesor_002': {
+                terms: ['cuánto', 'cuanto', 'costo', 'precio', 'pagar', 'mensual', 'anual',
+                       'metros', 'm2', 'cotización', 'presupuesto', 'financiamiento', 'crédito',
+                       'renta', 'venta', 'compra', 'adquirir', 'invertir'],
+                weight: 3
+            }
+        };
+
+        const advisorTerms = relatedTerms[advisor.id];
+        if (advisorTerms) {
+            for (const term of advisorTerms.terms) {
+                if (text.includes(term.toLowerCase())) {
+                    contextScore += advisorTerms.weight;
+                }
+            }
+        }
+
+        return contextScore;
     }
 
     async analyzeConversation(messages, userId = null) {
