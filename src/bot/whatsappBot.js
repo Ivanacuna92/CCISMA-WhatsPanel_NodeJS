@@ -205,14 +205,20 @@ class WhatsAppBot {
     }
     
     async processMessage(userId, userMessage, chatId) {
-        // Verificar si necesitamos recolectar datos del usuario
+        // Verificar si necesitamos recolectar datos del usuario (solo nombre al inicio)
         const dataCollectionState = userDataManager.getDataCollectionState(userId);
 
-        if (dataCollectionState !== 'completed') {
-            const response = await this.handleDataCollection(userId, userMessage, dataCollectionState);
+        // Solo solicitar nombre al inicio, el email se solicitará antes del modo soporte
+        if (dataCollectionState === 'none' || dataCollectionState === 'name_pending') {
+            const response = await this.handleInitialDataCollection(userId, userMessage, dataCollectionState);
             if (response) {
                 return response;
             }
+        }
+
+        // Verificar si estamos esperando el email para activar soporte
+        if (dataCollectionState === 'email_pending_for_support') {
+            return await this.handleEmailCollection(userId, userMessage, chatId);
         }
 
         // Agregar mensaje del usuario a la sesión
@@ -248,6 +254,18 @@ class WhatsAppBot {
 
         // Verificar si la respuesta contiene el marcador de activar soporte
         if (aiResponse.includes('{{ACTIVAR_SOPORTE}}')) {
+            // Primero verificar si tenemos el email del usuario
+            const userData = await userDataManager.getUserData(userId);
+            if (!userData || !userData.email) {
+                // Si no tenemos email, solicitarlo antes de activar soporte
+                await sessionManager.addMessage(userId, 'assistant', aiResponse.replace('{{ACTIVAR_SOPORTE}}', '').trim(), chatId);
+                await userDataManager.setPendingSupportActivation(userId, true);
+
+                const emailRequest = `Para poder asignarte un asesor especializado y mantener un seguimiento de tu caso, necesito tu correo electrónico.\n\n📧 Por favor, proporciona tu correo electrónico:`;
+                return emailRequest;
+            }
+
+            // Si ya tenemos el email, continuar con la activación del soporte
             // Remover el marcador de la respuesta
             const cleanResponse = aiResponse.replace('{{ACTIVAR_SOPORTE}}', '').trim();
 
@@ -345,51 +363,89 @@ class WhatsAppBot {
         }
     }
 
-    async handleDataCollection(userId, userMessage, state) {
-        const userData = await userDataManager.getUserData(userId);
-
+    async handleInitialDataCollection(userId, userMessage, state) {
         switch (state) {
             case 'none':
+                // Primera vez, dar bienvenida y solicitar nombre
+                const welcomeMessage = `¡Hola! 👋 Bienvenido a nuestro servicio de atención.\n\nPara brindarte una mejor experiencia personalizada, ¿podrías decirme tu nombre completo por favor?`;
+                await userDataManager.setUserData(userId, {});
+                return welcomeMessage;
+
             case 'name_pending':
-                // Solicitar nombre
-                if (!userData || !userData.name) {
-                    if (state === 'none') {
-                        // Primera vez, dar bienvenida y solicitar nombre
-                        const welcomeMessage = `¡Hola! 👋 Bienvenido a nuestro servicio de atención.\n\nPara brindarte una mejor experiencia personalizada, me gustaría conocerte un poco mejor.\n\n¿Podrías decirme tu nombre completo por favor?`;
-                        await userDataManager.setUserData(userId, {});
-                        return welcomeMessage;
-                    } else {
-                        // Validar y guardar nombre
-                        const name = userMessage.trim();
-                        if (userDataManager.isValidName(name)) {
-                            await userDataManager.setUserData(userId, { name: name });
-                            return `¡Mucho gusto, ${name}! 😊\n\nAhora, ¿podrías proporcionarme tu correo electrónico? Esto nos ayudará a enviarte información relevante y mantener un mejor seguimiento de nuestra conversación.`;
-                        } else {
-                            return `Por favor, ingresa un nombre válido (solo letras y espacios, mínimo 2 caracteres). ¿Cuál es tu nombre completo?`;
-                        }
-                    }
-                }
-                break;
-
-            case 'email_pending':
-                // Validar y guardar email
-                const email = userMessage.trim().toLowerCase();
-                if (userDataManager.isValidEmail(email)) {
-                    await userDataManager.setUserData(userId, { email: email });
-                    await userDataManager.markDataAsCollected(userId);
-                    const currentUserData = await userDataManager.getUserData(userId);
-                    return `¡Perfecto, ${currentUserData.name}! ✅\n\nHe registrado tu información:\n📧 **Email:** ${email}\n\nYa estamos listos para comenzar. ¿En qué puedo ayudarte hoy?`;
+                // Validar y guardar nombre
+                const name = userMessage.trim();
+                if (userDataManager.isValidName(name)) {
+                    await userDataManager.setUserData(userId, { name: name });
+                    await userDataManager.markNameCollected(userId);
+                    return `¡Mucho gusto, ${name}! 😊\n\n¿En qué puedo ayudarte hoy?`;
                 } else {
-                    return `Por favor, ingresa un correo electrónico válido (ejemplo: tucorreo@ejemplo.com):`;
+                    return `Por favor, ingresa un nombre válido (solo letras y espacios, mínimo 2 caracteres). ¿Cuál es tu nombre completo?`;
                 }
-
-            case 'validation_pending':
-                // Esto no debería pasar normalmente, pero por si acaso
-                await userDataManager.markDataAsCollected(userId);
-                return null; // Continuar con el flujo normal
         }
 
         return null; // Continuar con el flujo normal
+    }
+
+    async handleEmailCollection(userId, userMessage, chatId) {
+        // Validar y guardar email
+        const email = userMessage.trim().toLowerCase();
+        if (!userDataManager.isValidEmail(email)) {
+            return `Por favor, ingresa un correo electrónico válido (ejemplo: tucorreo@ejemplo.com):`;
+        }
+
+        // Guardar email y marcar datos como completos
+        await userDataManager.setUserData(userId, { email: email });
+        await userDataManager.markDataAsCollected(userId);
+        const userData = await userDataManager.getUserData(userId);
+
+        // Verificar si había una activación de soporte pendiente
+        if (await userDataManager.hasPendingSupportActivation(userId)) {
+            // Limpiar el flag de soporte pendiente
+            await userDataManager.setPendingSupportActivation(userId, false);
+
+            // Activar modo soporte
+            await humanModeManager.setMode(userId, 'support');
+            await sessionManager.updateSessionMode(userId, chatId, 'support');
+
+            // Obtener asesor asignado
+            const conversationHistory = await sessionManager.getMessages(userId, chatId);
+            let asesorAsignado = null;
+
+            try {
+                const analysis = await conversationAnalyzer.analyzeConversation(
+                    conversationHistory.map(msg => ({
+                        type: msg.role === 'user' ? 'USER' : 'BOT',
+                        message: msg.content
+                    })),
+                    userId
+                );
+                asesorAsignado = analysis.asesor_asignado;
+            } catch (error) {
+                console.error('[Bot] Error analizando conversación:', error);
+            }
+
+            // Preparar respuesta con información del asesor
+            let response = `¡Perfecto ${userData.name}! ✅\n\nHe registrado tu correo: ${email}\n\nTe estoy transfiriendo con uno de nuestros asesores especializados que te ayudará con tu caso.`;
+
+            if (asesorAsignado) {
+                response += `\n\n📋 *Asesor asignado:* ${asesorAsignado.nombre}\n` +
+                    `_Especialidad: ${asesorAsignado.especialidades.join(', ')}_`;
+            }
+
+            // Registrar en logs
+            const logMessage = asesorAsignado ?
+                `Modo SOPORTE activado para ${userId} - Asesor: ${asesorAsignado.nombre}` :
+                `Modo SOPORTE activado para ${userId}`;
+            await logger.log('SYSTEM', logMessage);
+
+            // Agregar respuesta al historial
+            await sessionManager.addMessage(userId, 'assistant', response, chatId);
+
+            return response;
+        } else {
+            // Solo confirmación de email sin activar soporte
+            return `¡Gracias ${userData.name}! ✅\n\nHe registrado tu correo: ${email}\n\n¿En qué más puedo ayudarte?`;
+        }
     }
 }
 

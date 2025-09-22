@@ -52,6 +52,8 @@ class UserDataManager {
             name: data.name !== undefined ? data.name : existingData.name,
             email: data.email !== undefined ? data.email : existingData.email,
             dataCollected: data.dataCollected !== undefined ? data.dataCollected : existingData.dataCollected,
+            nameCollected: data.nameCollected !== undefined ? data.nameCollected : existingData.nameCollected,
+            pendingSupportActivation: data.pendingSupportActivation !== undefined ? data.pendingSupportActivation : existingData.pendingSupportActivation,
             createdAt: existingData.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString()
         };
@@ -100,16 +102,33 @@ class UserDataManager {
         if (!userData) {
             return 'none'; // No hay datos
         }
+        // Si tiene flag de soporte pendiente y no tiene email
+        if (userData.pendingSupportActivation && !userData.email) {
+            return 'email_pending_for_support';
+        }
         if (userData.dataCollected) {
             return 'completed'; // Datos completos
         }
-        if (userData.name && !userData.email) {
-            return 'email_pending'; // Tiene nombre, falta email
+        if (userData.nameCollected && !userData.email) {
+            return 'name_collected'; // Solo tiene nombre
         }
         if (!userData.name) {
             return 'name_pending'; // Falta nombre
         }
         return 'validation_pending'; // Datos pendientes de validación
+    }
+
+    async markNameCollected(userId) {
+        return await this.setUserData(userId, { nameCollected: true });
+    }
+
+    async setPendingSupportActivation(userId, value) {
+        return await this.setUserData(userId, { pendingSupportActivation: value });
+    }
+
+    async hasPendingSupportActivation(userId) {
+        const userData = this.cache.get(userId);
+        return userData && userData.pendingSupportActivation === true;
     }
 }
 
