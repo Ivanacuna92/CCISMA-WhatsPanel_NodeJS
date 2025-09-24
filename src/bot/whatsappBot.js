@@ -213,6 +213,35 @@ class WhatsAppBot {
         const userId = from.replace("@s.whatsapp.net", "");
         const userName = msg.pushName || userId;
 
+        // Implementar un sistema de debounce para evitar procesamiento duplicado
+        if (!this.messageProcessingQueue) {
+          this.messageProcessingQueue = new Map();
+        }
+
+        // Crear clave única para el mensaje
+        const messageKey = `${userId}_${conversation}_${Date.now()}`;
+
+        // Verificar si ya estamos procesando un mensaje similar
+        const recentKey = Array.from(this.messageProcessingQueue.keys()).find(key => {
+          const [id, content] = key.split('_');
+          return id === userId && content === conversation;
+        });
+
+        if (recentKey && Date.now() - this.messageProcessingQueue.get(recentKey) < 2000) {
+          console.log(`Mensaje duplicado ignorado de ${userId}`);
+          return;
+        }
+
+        // Marcar mensaje como en procesamiento
+        this.messageProcessingQueue.set(messageKey, Date.now());
+
+        // Limpiar mensajes antiguos del queue
+        for (const [key, timestamp] of this.messageProcessingQueue.entries()) {
+          if (Date.now() - timestamp > 5000) {
+            this.messageProcessingQueue.delete(key);
+          }
+        }
+
         await logger.log("cliente", conversation, userId, userName);
 
         // Verificar si está en modo humano o soporte
@@ -225,15 +254,21 @@ class WhatsAppBot {
             "SYSTEM",
             `Mensaje ignorado - Modo ${mode} activo para ${userName} (${userId})`
           );
+          this.messageProcessingQueue.delete(messageKey);
           return;
         }
 
         // Procesar mensaje y generar respuesta
         const response = await this.processMessage(userId, conversation, from);
 
-        // Enviar respuesta
-        await this.sock.sendMessage(from, { text: response });
-        await logger.log("bot", response, userId, userName);
+        // Enviar respuesta solo si tenemos una respuesta válida
+        if (response && response.trim() !== "") {
+          await this.sock.sendMessage(from, { text: response });
+          await logger.log("bot", response, userId, userName);
+        }
+
+        // Eliminar del queue después de procesar
+        this.messageProcessingQueue.delete(messageKey);
       } catch (error) {
         await this.handleError(error, m.messages[0]);
       }
@@ -262,6 +297,23 @@ class WhatsAppBot {
     // Verificar si estamos esperando el email para activar soporte
     if (dataCollectionState === "email_pending_for_support") {
       return await this.handleEmailCollection(userId, userMessage, chatId);
+    }
+
+    // Detectar si el usuario está proporcionando un email sin que se lo hayamos pedido
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const trimmedMessage = userMessage.trim().toLowerCase();
+    if (emailRegex.test(trimmedMessage) && dataCollectionState === "name_collected") {
+      // El usuario proporcionó un email espontáneamente, guardarlo
+      await userDataManager.setUserData(userId, { email: trimmedMessage });
+      await userDataManager.markDataAsCollected(userId);
+      const userData = await userDataManager.getUserData(userId);
+
+      // Agregar mensaje del usuario a la sesión
+      await sessionManager.addMessage(userId, "user", userMessage, chatId);
+
+      const confirmationMessage = `¡Gracias ${userData.name}! ✅\n\nHe registrado tu correo: ${trimmedMessage}\n\n¿En qué puedo ayudarte hoy?`;
+      await sessionManager.addMessage(userId, "assistant", confirmationMessage, chatId);
+      return confirmationMessage;
     }
 
     // Agregar mensaje del usuario a la sesión
@@ -306,12 +358,18 @@ class WhatsAppBot {
       const userData = await userDataManager.getUserData(userId);
       if (!userData || !userData.email) {
         // Si no tenemos email, solicitarlo antes de activar soporte
-        await sessionManager.addMessage(
-          userId,
-          "assistant",
-          aiResponse.replace("{{ACTIVAR_SOPORTE}}", "").trim(),
-          chatId
-        );
+        const cleanResponse = aiResponse.replace("{{ACTIVAR_SOPORTE}}", "").trim();
+
+        // Solo agregar la respuesta limpia si tiene contenido
+        if (cleanResponse.length > 0) {
+          await sessionManager.addMessage(
+            userId,
+            "assistant",
+            cleanResponse,
+            chatId
+          );
+        }
+
         await userDataManager.setPendingSupportActivation(userId, true);
 
         const emailRequest = `Para poder asignarte un asesor especializado y mantener un seguimiento de tu caso, necesito tu correo electrónico.\n\n📧 Por favor, proporciona tu correo electrónico:`;
@@ -455,7 +513,11 @@ class WhatsAppBot {
     // Validar y guardar email
     const email = userMessage.trim().toLowerCase();
     if (!userDataManager.isValidEmail(email)) {
-      return `Por favor, ingresa un correo electrónico válido (ejemplo: tucorreo@ejemplo.com):`;
+      // Agregar el mensaje del usuario al historial antes de responder
+      await sessionManager.addMessage(userId, "user", userMessage, chatId);
+      const errorMessage = `Por favor, ingresa un correo electrónico válido (ejemplo: tucorreo@ejemplo.com):`;
+      await sessionManager.addMessage(userId, "assistant", errorMessage, chatId);
+      return errorMessage;
     }
 
     // Guardar email y marcar datos como completos
