@@ -143,52 +143,48 @@ class SessionManager {
         return 'ai';
     }
 
-    async checkInactiveSessions(sock) {
+    async checkInactiveSessions(sock, followUpManager) {
         const now = Date.now();
-        
+
         // Verificar sesiones en cache local
         for (const [userId, session] of this.localCache.entries()) {
             // Si está en modo humano o soporte, NO limpiar la sesión por inactividad
             const isHuman = await humanModeManager.isHumanMode(userId);
             const isSupport = await humanModeManager.isSupportMode(userId);
-            
+
             if (isHuman || isSupport) {
                 continue;
             }
-            
+
+            // Verificar si han pasado 5 minutos de inactividad
             if (now - session.lastActivity > config.sessionTimeout && session.messages.length > 0) {
-                // Enviar mensaje de finalización
-                const endMessage = '⏰ Tu sesión de conversación ha finalizado por inactividad. Puedes escribirme nuevamente para iniciar una nueva conversación.';
-                
-                if (session.chatId && sock) {
-                    try {
-                        // Con Baileys, enviamos directamente al chatId
-                        await sock.sendMessage(session.chatId, { text: endMessage });
-                        // Registrar el mensaje de finalización en los logs
-                        await logger.log('BOT', endMessage, userId);
-                    } catch (error) {
-                        console.error('Error enviando mensaje de finalización:', error);
-                    }
+                // Verificar si ya hay un seguimiento activo
+                const hasActiveFollowUp = followUpManager ? await followUpManager.isFollowUpActive(userId) : false;
+
+                if (!hasActiveFollowUp && followUpManager) {
+                    // NO enviar mensaje de finalización
+                    // En su lugar, iniciar seguimiento automático
+                    await followUpManager.startFollowUp(userId, session.chatId);
+                    await logger.log('SYSTEM', 'Seguimiento automático iniciado por inactividad de 5 minutos', userId);
                 }
-                
-                await this.clearSession(userId);
-                await logger.log('SYSTEM', 'Conversación reiniciada por inactividad', userId);
+
+                // NO limpiar la sesión - mantener el contexto para los seguimientos
             }
         }
-        
-        // Limpiar sesiones antiguas de la BD (más de 24 horas)
+
+        // Limpiar sesiones antiguas de la BD (más de 7 días sin actividad y sin seguimiento activo)
         try {
             await database.query(
-                'DELETE FROM user_sessions WHERE last_activity < DATE_SUB(NOW(), INTERVAL 24 HOUR)'
+                'DELETE FROM user_sessions WHERE last_activity < DATE_SUB(NOW(), INTERVAL 7 DAY)'
             );
         } catch (error) {
             console.error('Error limpiando sesiones antiguas de BD:', error);
         }
     }
 
-    startCleanupTimer(sock) {
+    startCleanupTimer(sock, followUpManager = null) {
         setInterval(() => {
-            this.checkInactiveSessions(sock);
+            this.checkInactiveSessions(sock, followUpManager);
         }, config.checkInterval);
     }
     

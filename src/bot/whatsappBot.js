@@ -16,6 +16,7 @@ const promptLoader = require("../services/promptLoader");
 const humanModeManager = require("../services/humanModeManager");
 const conversationAnalyzer = require("../services/conversationAnalyzer");
 const userDataManager = require("../services/userDataManager");
+const followUpManager = require("../services/followUpManager");
 
 class WhatsAppBot {
   constructor() {
@@ -154,7 +155,14 @@ class WhatsAppBot {
           this.reconnectAttempts = 0;
           this.isReconnecting = false;
           logger.log("SYSTEM", "Bot iniciado correctamente con Baileys");
-          sessionManager.startCleanupTimer(this.sock);
+
+          // Inicializar follow-up manager
+          followUpManager.initialize().then(() => {
+            followUpManager.startFollowUpTimer(this.sock, aiService, sessionManager);
+          });
+
+          // Iniciar timer de limpieza de sesiones con referencia al followUpManager
+          sessionManager.startCleanupTimer(this.sock, followUpManager);
         }
       });
     } catch (error) {
@@ -255,6 +263,12 @@ class WhatsAppBot {
             `Mensaje ignorado - Modo ${mode} activo para ${userName} (${userId})`
           );
           this.messageProcessingQueue.delete(messageKey);
+
+          // Detener seguimiento si está activo (ya está en conversación activa)
+          if (await followUpManager.isFollowUpActive(userId)) {
+            await followUpManager.stopFollowUp(userId, 'modo_humano_activo');
+          }
+
           return;
         }
 
@@ -266,6 +280,27 @@ class WhatsAppBot {
           await this.sock.sendMessage(from, { text: response });
           await logger.log("bot", response, userId, userName);
         }
+
+        // Analizar estado de la conversación después de la respuesta
+        const conversationHistory = await sessionManager.getMessages(userId, from);
+        const status = await aiService.analyzeConversationStatus(conversationHistory, conversation);
+
+        console.log(`[FollowUp] Estado de conversación para ${userId}: ${status}`);
+
+        // Manejar seguimientos basados en el estado
+        if (status === 'ACEPTADO' || status === 'RECHAZADO' || status === 'FRUSTRADO') {
+          // Detener seguimiento si existe
+          if (await followUpManager.isFollowUpActive(userId)) {
+            await followUpManager.stopFollowUp(userId, status.toLowerCase());
+          }
+        } else if (status === 'ACTIVO') {
+          // Cliente respondió - detener seguimiento si existe
+          if (await followUpManager.isFollowUpActive(userId)) {
+            await followUpManager.stopFollowUp(userId, 'volvio_activo');
+          }
+          // NO iniciar seguimiento aquí - se iniciará automáticamente a los 5 minutos por sessionManager
+        }
+        // NO manejamos INACTIVO aquí - el sessionManager lo hace a los 5 minutos
 
         // Eliminar del queue después de procesar
         this.messageProcessingQueue.delete(messageKey);
