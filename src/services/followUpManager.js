@@ -36,16 +36,20 @@ class FollowUpManager {
 
     async startFollowUp(userId, chatId) {
         try {
+            console.log(`[FollowUp] 🔍 Intentando iniciar seguimiento para ${userId}`);
+
             // Verificar si ya existe un seguimiento activo
             const existing = await database.findOne('follow_ups', 'user_id = ? AND status = "active"', [userId]);
 
             if (existing) {
-                console.log(`Seguimiento ya activo para usuario ${userId}`);
+                console.log(`[FollowUp] ⚠️ Seguimiento ya activo para usuario ${userId}`);
                 return;
             }
 
             // Crear nuevo seguimiento
             const now = new Date();
+            console.log(`[FollowUp] 📝 Insertando en BD para ${userId}...`);
+
             await database.insert('follow_ups', {
                 user_id: userId,
                 chat_id: chatId,
@@ -66,9 +70,10 @@ class FollowUpManager {
             });
 
             await logger.log('SYSTEM', 'Seguimiento automático iniciado', userId);
-            console.log(`✓ Seguimiento iniciado para usuario ${userId}`);
+            console.log(`[FollowUp] ✅ Seguimiento iniciado exitosamente para ${userId}`);
+            console.log(`[FollowUp] 📊 Total seguimientos activos: ${this.followUps.size}`);
         } catch (error) {
-            console.error('Error iniciando seguimiento:', error);
+            console.error(`[FollowUp] ❌ Error iniciando seguimiento para ${userId}:`, error);
         }
     }
 
@@ -105,13 +110,22 @@ class FollowUpManager {
 
     async checkPendingFollowUps(sock, aiService, sessionManager) {
         const now = Date.now();
+        console.log(`[FollowUp] 🔄 Revisando seguimientos pendientes... Total activos: ${this.followUps.size}`);
 
         for (const [userId, followUp] of this.followUps.entries()) {
             try {
                 // Verificar si han pasado 10 minutos desde el último seguimiento (modo pruebas)
                 const timeSinceLastFollowUp = now - followUp.lastFollowUp;
+                const minutesSinceLastFollowUp = Math.floor(timeSinceLastFollowUp / 60000);
+
+                console.log(`[FollowUp] Usuario ${userId}:`);
+                console.log(`  - Tiempo desde último seguimiento: ${minutesSinceLastFollowUp} minutos`);
+                console.log(`  - Contador de seguimientos: ${followUp.followUpCount}`);
+                console.log(`  - Intervalo requerido: ${this.followUpInterval / 60000} minutos`);
 
                 if (timeSinceLastFollowUp >= this.followUpInterval) {
+                    console.log(`  - ✅ Tiempo cumplido, generando mensaje...`);
+
                     // Generar mensaje de seguimiento usando IA
                     const followUpMessage = await this.generateFollowUpMessage(
                         userId,
@@ -120,8 +134,11 @@ class FollowUpManager {
                         sessionManager
                     );
 
+                    console.log(`  - 📝 Mensaje generado: "${followUpMessage.substring(0, 50)}..."`);
+
                     // Enviar mensaje
                     if (followUp.chatId && sock) {
+                        console.log(`  - 📤 Enviando mensaje a ${followUp.chatId}...`);
                         await sock.sendMessage(followUp.chatId, { text: followUpMessage });
                         await logger.log('BOT', followUpMessage, userId);
 
@@ -142,12 +159,21 @@ class FollowUpManager {
                         // Actualizar cache
                         this.followUps.set(userId, followUp);
 
-                        console.log(`✓ Mensaje de seguimiento #${followUp.followUpCount} enviado a ${userId}`);
+                        console.log(`  - ✅ Mensaje de seguimiento #${followUp.followUpCount} enviado exitosamente`);
+                    } else {
+                        console.log(`  - ❌ No se pudo enviar: chatId=${followUp.chatId}, sock=${!!sock}`);
                     }
+                } else {
+                    const minutesRemaining = Math.ceil((this.followUpInterval - timeSinceLastFollowUp) / 60000);
+                    console.log(`  - ⏳ Faltan ${minutesRemaining} minutos para el siguiente seguimiento`);
                 }
             } catch (error) {
-                console.error(`Error procesando seguimiento para ${userId}:`, error);
+                console.error(`[FollowUp] ❌ Error procesando seguimiento para ${userId}:`, error);
             }
+        }
+
+        if (this.followUps.size === 0) {
+            console.log(`[FollowUp] 📭 No hay seguimientos activos`);
         }
     }
 

@@ -145,30 +145,47 @@ class SessionManager {
 
     async checkInactiveSessions(sock, followUpManager) {
         const now = Date.now();
+        console.log(`[SessionManager] Verificando sesiones inactivas... Total en cache: ${this.localCache.size}`);
 
         // Verificar sesiones en cache local
         for (const [userId, session] of this.localCache.entries()) {
+            const inactiveTime = now - session.lastActivity;
+            const inactiveMinutes = Math.floor(inactiveTime / 60000);
+
+            console.log(`[SessionManager] Usuario ${userId}:`);
+            console.log(`  - Tiempo inactivo: ${inactiveMinutes} minutos`);
+            console.log(`  - Mensajes en sesión: ${session.messages.length}`);
+
             // Si está en modo humano o soporte, NO limpiar la sesión por inactividad
             const isHuman = await humanModeManager.isHumanMode(userId);
             const isSupport = await humanModeManager.isSupportMode(userId);
 
             if (isHuman || isSupport) {
+                console.log(`  - ⚠️ En modo ${isSupport ? 'SOPORTE' : 'HUMANO'} - saltando`);
                 continue;
             }
 
             // Verificar si han pasado 5 minutos de inactividad
             if (now - session.lastActivity > config.sessionTimeout && session.messages.length > 0) {
+                console.log(`  - ✅ Cumple con timeout de 5 minutos`);
+
                 // Verificar si ya hay un seguimiento activo
                 const hasActiveFollowUp = followUpManager ? await followUpManager.isFollowUpActive(userId) : false;
+                console.log(`  - Seguimiento activo existente: ${hasActiveFollowUp}`);
 
                 if (!hasActiveFollowUp && followUpManager) {
+                    console.log(`  - 🚀 INICIANDO SEGUIMIENTO para ${userId}`);
                     // NO enviar mensaje de finalización
                     // En su lugar, iniciar seguimiento automático
                     await followUpManager.startFollowUp(userId, session.chatId);
                     await logger.log('SYSTEM', 'Seguimiento automático iniciado por inactividad de 5 minutos', userId);
+                } else {
+                    console.log(`  - ⏭️ Seguimiento ya existe o followUpManager no disponible`);
                 }
 
                 // NO limpiar la sesión - mantener el contexto para los seguimientos
+            } else {
+                console.log(`  - ⏳ No cumple timeout aún (necesita ${5 - inactiveMinutes} minutos más)`);
             }
         }
 
