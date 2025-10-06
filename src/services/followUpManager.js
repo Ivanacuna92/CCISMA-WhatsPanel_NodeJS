@@ -5,9 +5,8 @@ const config = require('../config/config');
 class FollowUpManager {
     constructor() {
         this.followUps = new Map(); // Cache local para seguimientos activos
-        this.checkInterval = 60 * 1000; // 1 minuto (revisión frecuente para pruebas)
-        this.followUpInterval = 10 * 60 * 1000; // 10 minutos entre seguimientos (modo pruebas)
-        // Para producción usar: 24 * 60 * 60 * 1000 (24 horas)
+        this.checkInterval = 2 * 60 * 60 * 1000; // 2 horas (revisión en producción)
+        this.followUpInterval = 24 * 60 * 60 * 1000; // 24 horas entre seguimientos
     }
 
     async initialize() {
@@ -114,14 +113,14 @@ class FollowUpManager {
 
         for (const [userId, followUp] of this.followUps.entries()) {
             try {
-                // Verificar si han pasado 10 minutos desde el último seguimiento (modo pruebas)
+                // Verificar si han pasado 24 horas desde el último seguimiento
                 const timeSinceLastFollowUp = now - followUp.lastFollowUp;
-                const minutesSinceLastFollowUp = Math.floor(timeSinceLastFollowUp / 60000);
+                const hoursSinceLastFollowUp = Math.floor(timeSinceLastFollowUp / (60 * 60 * 1000));
 
                 console.log(`[FollowUp] Usuario ${userId}:`);
-                console.log(`  - Tiempo desde último seguimiento: ${minutesSinceLastFollowUp} minutos`);
+                console.log(`  - Tiempo desde último seguimiento: ${hoursSinceLastFollowUp} horas`);
                 console.log(`  - Contador de seguimientos: ${followUp.followUpCount}`);
-                console.log(`  - Intervalo requerido: ${this.followUpInterval / 60000} minutos`);
+                console.log(`  - Intervalo requerido: 24 horas`);
 
                 if (timeSinceLastFollowUp >= this.followUpInterval) {
                     console.log(`  - ✅ Tiempo cumplido, generando mensaje...`);
@@ -164,8 +163,8 @@ class FollowUpManager {
                         console.log(`  - ❌ No se pudo enviar: chatId=${followUp.chatId}, sock=${!!sock}`);
                     }
                 } else {
-                    const minutesRemaining = Math.ceil((this.followUpInterval - timeSinceLastFollowUp) / 60000);
-                    console.log(`  - ⏳ Faltan ${minutesRemaining} minutos para el siguiente seguimiento`);
+                    const hoursRemaining = Math.ceil((this.followUpInterval - timeSinceLastFollowUp) / (60 * 60 * 1000));
+                    console.log(`  - ⏳ Faltan ${hoursRemaining} horas para el siguiente seguimiento`);
                 }
             } catch (error) {
                 console.error(`[FollowUp] ❌ Error procesando seguimiento para ${userId}:`, error);
@@ -267,8 +266,8 @@ Responde ÚNICAMENTE con una de estas palabras: ACEPTADO, RECHAZADO, FRUSTRADO, 
     }
 
     startFollowUpTimer(sock, aiService, sessionManager) {
-        console.log('✓ Timer de seguimiento iniciado (revisión cada minuto - modo pruebas)');
-        console.log(`✓ Intervalo de seguimiento: ${this.followUpInterval / 60000} minutos`);
+        console.log('✓ Timer de seguimiento iniciado (revisión cada 2 horas)');
+        console.log(`✓ Intervalo de seguimiento: 24 horas`);
 
         setInterval(() => {
             this.checkPendingFollowUps(sock, aiService, sessionManager);
