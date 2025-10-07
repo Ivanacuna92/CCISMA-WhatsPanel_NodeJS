@@ -158,7 +158,11 @@ class WhatsAppBot {
 
           // Inicializar follow-up manager
           followUpManager.initialize().then(() => {
-            followUpManager.startFollowUpTimer(this.sock, aiService, sessionManager);
+            followUpManager.startFollowUpTimer(
+              this.sock,
+              aiService,
+              sessionManager
+            );
           });
 
           // Iniciar timer de limpieza de sesiones con referencia al followUpManager
@@ -230,12 +234,17 @@ class WhatsAppBot {
         const messageKey = `${userId}_${conversation}_${Date.now()}`;
 
         // Verificar si ya estamos procesando un mensaje similar
-        const recentKey = Array.from(this.messageProcessingQueue.keys()).find(key => {
-          const [id, content] = key.split('_');
-          return id === userId && content === conversation;
-        });
+        const recentKey = Array.from(this.messageProcessingQueue.keys()).find(
+          (key) => {
+            const [id, content] = key.split("_");
+            return id === userId && content === conversation;
+          }
+        );
 
-        if (recentKey && Date.now() - this.messageProcessingQueue.get(recentKey) < 2000) {
+        if (
+          recentKey &&
+          Date.now() - this.messageProcessingQueue.get(recentKey) < 2000
+        ) {
           console.log(`Mensaje duplicado ignorado de ${userId}`);
           return;
         }
@@ -266,7 +275,7 @@ class WhatsAppBot {
 
           // Detener seguimiento si está activo (ya está en conversación activa)
           if (await followUpManager.isFollowUpActive(userId)) {
-            await followUpManager.stopFollowUp(userId, 'modo_humano_activo');
+            await followUpManager.stopFollowUp(userId, "modo_humano_activo");
           }
 
           return;
@@ -282,21 +291,33 @@ class WhatsAppBot {
         }
 
         // Analizar estado de la conversación después de la respuesta
-        const conversationHistory = await sessionManager.getMessages(userId, from);
-        const status = await aiService.analyzeConversationStatus(conversationHistory, conversation);
+        const conversationHistory = await sessionManager.getMessages(
+          userId,
+          from
+        );
+        const status = await aiService.analyzeConversationStatus(
+          conversationHistory,
+          conversation
+        );
 
-        console.log(`[FollowUp] Estado de conversación para ${userId}: ${status}`);
+        console.log(
+          `[FollowUp] Estado de conversación para ${userId}: ${status}`
+        );
 
         // Manejar seguimientos basados en el estado
-        if (status === 'ACEPTADO' || status === 'RECHAZADO' || status === 'FRUSTRADO') {
+        if (
+          status === "ACEPTADO" ||
+          status === "RECHAZADO" ||
+          status === "FRUSTRADO"
+        ) {
           // Detener seguimiento si existe
           if (await followUpManager.isFollowUpActive(userId)) {
             await followUpManager.stopFollowUp(userId, status.toLowerCase());
           }
-        } else if (status === 'ACTIVO') {
+        } else if (status === "ACTIVO") {
           // Cliente respondió - detener seguimiento si existe
           if (await followUpManager.isFollowUpActive(userId)) {
-            await followUpManager.stopFollowUp(userId, 'volvio_activo');
+            await followUpManager.stopFollowUp(userId, "volvio_activo");
           }
           // NO iniciar seguimiento aquí - se iniciará automáticamente a los 5 minutos por sessionManager
         }
@@ -326,8 +347,13 @@ class WhatsAppBot {
       await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
       // Dar bienvenida y pedir nombre de forma educada
-      const welcomeMessage = `¡Hola! Soy Daniel, asistente virtual de Navetec.\n\n¿Con quién tengo el gusto?\n\n_Por favor, proporciona únicamente tu nombre._`;
-      await sessionManager.addMessage(userId, "assistant", welcomeMessage, chatId);
+      const welcomeMessage = `¡Hola! Soy Daniel, asistente virtual de Navetec.\n\n¿Con quién tengo el gusto?\n\n_Por favor, proporciona tu nombre completo`;
+      await sessionManager.addMessage(
+        userId,
+        "assistant",
+        welcomeMessage,
+        chatId
+      );
       return welcomeMessage;
     }
 
@@ -351,7 +377,12 @@ class WhatsAppBot {
 
       const name = userData?.name ? ` ${userData.name}` : "";
       const confirmationMessage = `¡Gracias${name}! ✅\n\nHe registrado tu correo: ${email}\n\n¿En qué más puedo ayudarte?`;
-      await sessionManager.addMessage(userId, "assistant", confirmationMessage, chatId);
+      await sessionManager.addMessage(
+        userId,
+        "assistant",
+        confirmationMessage,
+        chatId
+      );
       return confirmationMessage;
     }
 
@@ -359,13 +390,16 @@ class WhatsAppBot {
     let conversationHistory = await sessionManager.getMessages(userId, chatId);
 
     // Detectar si es un nombre (después de que el bot lo haya pedido en la conversación)
-    const lastBotMessage = conversationHistory.filter(m => m.role === 'assistant').slice(-1)[0];
+    const lastBotMessage = conversationHistory
+      .filter((m) => m.role === "assistant")
+      .slice(-1)[0];
 
-    if (lastBotMessage &&
-        (lastBotMessage.content.toLowerCase().includes('¿cómo puedo llamarte?') ||
-         lastBotMessage.content.toLowerCase().includes('¿cuál es tu nombre?') ||
-         lastBotMessage.content.toLowerCase().includes('tu nombre'))) {
-
+    if (
+      lastBotMessage &&
+      (lastBotMessage.content.toLowerCase().includes("¿cómo puedo llamarte?") ||
+        lastBotMessage.content.toLowerCase().includes("¿cuál es tu nombre?") ||
+        lastBotMessage.content.toLowerCase().includes("tu nombre"))
+    ) {
       // Validar que parezca un nombre
       if (userDataManager.isValidName(trimmedMessage)) {
         await userDataManager.setUserData(userId, { name: trimmedMessage });
@@ -375,7 +409,12 @@ class WhatsAppBot {
         await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
         const confirmationMessage = `¡Mucho gusto, ${trimmedMessage}! ¿En qué más puedo ayudarte?`;
-        await sessionManager.addMessage(userId, "assistant", confirmationMessage, chatId);
+        await sessionManager.addMessage(
+          userId,
+          "assistant",
+          confirmationMessage,
+          chatId
+        );
         return confirmationMessage;
       }
     }
@@ -439,7 +478,9 @@ class WhatsAppBot {
       const userData = await userDataManager.getUserData(userId);
       if (!userData || !userData.email) {
         // Si no tenemos email, solicitarlo antes de activar soporte
-        const cleanResponse = aiResponse.replace("{{ACTIVAR_SOPORTE}}", "").trim();
+        const cleanResponse = aiResponse
+          .replace("{{ACTIVAR_SOPORTE}}", "")
+          .trim();
 
         // Solo agregar la respuesta limpia si tiene contenido
         if (cleanResponse.length > 0) {
@@ -567,7 +608,6 @@ class WhatsAppBot {
     }
   }
 
-
   async handleEmailCollection(userId, userMessage, chatId) {
     // Validar y guardar email
     const email = userMessage.trim().toLowerCase();
@@ -575,7 +615,12 @@ class WhatsAppBot {
       // Agregar el mensaje del usuario al historial antes de responder
       await sessionManager.addMessage(userId, "user", userMessage, chatId);
       const errorMessage = `Por favor, ingresa un correo electrónico válido (ejemplo: tucorreo@ejemplo.com):`;
-      await sessionManager.addMessage(userId, "assistant", errorMessage, chatId);
+      await sessionManager.addMessage(
+        userId,
+        "assistant",
+        errorMessage,
+        chatId
+      );
       return errorMessage;
     }
 
