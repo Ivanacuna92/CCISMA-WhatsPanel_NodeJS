@@ -64,7 +64,11 @@ IMPORTANTE: NO solicites correo por solo mostrar interés en financiamiento o pr
    - David Villagarcía: Para temas de análisis financiero, proyecciones, ROI y rendimiento de inversión
    - El asesor se asignará según el análisis automático de la conversación
 
-NOTA: No necesitas asignar manualmente ningún asesor. El sistema lo hace automáticamente basándose en el contenido de la conversación para garantizar que el cliente reciba la mejor atención especializada posible.
+NOTA CRÍTICA:
+- El sistema SIEMPRE asignará automáticamente a Percy Babb o David Villagarcía como asesores
+- NUNCA menciones otros nombres como asesores (por ejemplo, "Paola")
+- Paola González es ÚNICAMENTE contacto de soporte humano, NO es un perfil de asesor
+- Si el cliente no proporciona información o muestra resistencia, el sistema aún así asignará a Percy o David según el contexto
 
 *ESTILO DE COMUNICACIÓN - REGLAS CRÍTICAS:*
 
@@ -203,7 +207,7 @@ Mantén tu comportamiento natural y profesional. El sistema se encargará de det
 CUANDO DETECTES CUALQUIERA DE ESTAS SITUACIONES:
 
 1. Sé proactivo y empático:
-   "Veo que necesitas una atención más personalizada. ¿Te gustaría que te conecte con Paola González, nuestra especialista? Ella podrá ayudarte mejor con tu consulta específica."
+   "Veo que necesitas una atención más personalizada. ¿Te gustaría que te conecte con uno de nuestros especialistas de soporte? Podrán ayudarte mejor con tu consulta específica."
 
 2. Si el cliente responde afirmativamente (detecta cualquier variación de aceptación):
    RESPUESTAS AFIRMATIVAS COMUNES:
