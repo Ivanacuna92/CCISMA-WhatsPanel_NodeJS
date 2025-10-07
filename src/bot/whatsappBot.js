@@ -311,54 +311,73 @@ class WhatsAppBot {
   }
 
   async processMessage(userId, userMessage, chatId) {
-    // Verificar si necesitamos recolectar datos del usuario (solo nombre al inicio)
     const dataCollectionState = userDataManager.getDataCollectionState(userId);
 
-    // Solo solicitar nombre al inicio, el email se solicitará antes del modo soporte
-    if (
-      dataCollectionState === "none" ||
-      dataCollectionState === "name_pending"
-    ) {
-      const response = await this.handleInitialDataCollection(
-        userId,
-        userMessage,
-        dataCollectionState
-      );
-      if (response) {
-        return response;
-      }
-    }
-
-    // Verificar si estamos esperando el email para activar soporte
+    // Verificar si estamos esperando el email para activar soporte (prioridad alta)
     if (dataCollectionState === "email_pending_for_support") {
       return await this.handleEmailCollection(userId, userMessage, chatId);
     }
 
-    // Detectar si el usuario está proporcionando un email sin que se lo hayamos pedido
+    // Si es usuario nuevo, dar bienvenida simple SIN pedir datos inmediatamente
+    if (dataCollectionState === "none") {
+      await userDataManager.setUserData(userId, {});
+      // No bloqueamos la conversación, solo inicializamos el usuario
+    }
+
+    // Detectar si el usuario está proporcionando un email o nombre directamente
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const trimmedMessage = userMessage.trim().toLowerCase();
-    if (emailRegex.test(trimmedMessage) && dataCollectionState === "name_collected") {
-      // El usuario proporcionó un email espontáneamente, guardarlo
-      await userDataManager.setUserData(userId, { email: trimmedMessage });
-      await userDataManager.markDataAsCollected(userId);
+    const trimmedMessage = userMessage.trim();
+
+    // Detectar email
+    if (emailRegex.test(trimmedMessage.toLowerCase())) {
+      const email = trimmedMessage.toLowerCase();
+      await userDataManager.setUserData(userId, { email: email });
       const userData = await userDataManager.getUserData(userId);
+
+      // Marcar datos como completos si tiene nombre y email
+      if (userData.name) {
+        await userDataManager.markDataAsCollected(userId);
+      }
 
       // Agregar mensaje del usuario a la sesión
       await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
-      const confirmationMessage = `¡Gracias ${userData.name}! ✅\n\nHe registrado tu correo: ${trimmedMessage}\n\n¿En qué puedo ayudarte hoy?`;
+      const name = userData?.name ? ` ${userData.name}` : "";
+      const confirmationMessage = `¡Gracias${name}! ✅\n\nHe registrado tu correo: ${email}\n\n¿En qué más puedo ayudarte?`;
       await sessionManager.addMessage(userId, "assistant", confirmationMessage, chatId);
       return confirmationMessage;
+    }
+
+    // Obtener historial para análisis y detección de contexto
+    let conversationHistory = await sessionManager.getMessages(userId, chatId);
+
+    // Detectar si es un nombre (después de que el bot lo haya pedido en la conversación)
+    const lastBotMessage = conversationHistory.filter(m => m.role === 'assistant').slice(-1)[0];
+
+    if (lastBotMessage &&
+        (lastBotMessage.content.toLowerCase().includes('¿cómo puedo llamarte?') ||
+         lastBotMessage.content.toLowerCase().includes('¿cuál es tu nombre?') ||
+         lastBotMessage.content.toLowerCase().includes('tu nombre'))) {
+
+      // Validar que parezca un nombre
+      if (userDataManager.isValidName(trimmedMessage)) {
+        await userDataManager.setUserData(userId, { name: trimmedMessage });
+        await userDataManager.markNameCollected(userId);
+
+        // Agregar mensaje del usuario a la sesión
+        await sessionManager.addMessage(userId, "user", userMessage, chatId);
+
+        const confirmationMessage = `¡Mucho gusto, ${trimmedMessage}! ¿En qué más puedo ayudarte?`;
+        await sessionManager.addMessage(userId, "assistant", confirmationMessage, chatId);
+        return confirmationMessage;
+      }
     }
 
     // Agregar mensaje del usuario a la sesión
     await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
-    // Obtener historial para análisis
-    const conversationHistory = await sessionManager.getMessages(
-      userId,
-      chatId
-    );
+    // Actualizar historial después de agregar el mensaje
+    conversationHistory = await sessionManager.getMessages(userId, chatId);
 
     // Analizar conversación y obtener asesor asignado
     let asesorAsignado = null;
@@ -378,9 +397,29 @@ class WhatsAppBot {
       console.error("[Bot] Error analizando conversación:", error);
     }
 
+    // Obtener datos del usuario para contexto
+    const userData = await userDataManager.getUserData(userId);
+
+    // Preparar prompt del sistema con información sobre datos del usuario
+    let systemPromptWithContext = this.systemPrompt;
+
+    if (userData) {
+      systemPromptWithContext += `\n\n*DATOS DEL CLIENTE ACTUAL:*`;
+      if (userData.name) {
+        systemPromptWithContext += `\n- Nombre: ${userData.name} (YA TIENES EL NOMBRE, NO LO PIDAS DE NUEVO)`;
+      } else {
+        systemPromptWithContext += `\n- Nombre: No disponible (puedes pedirlo de forma natural después de 2-3 mensajes)`;
+      }
+      if (userData.email) {
+        systemPromptWithContext += `\n- Correo: ${userData.email} (YA TIENES EL CORREO, NO LO PIDAS DE NUEVO)`;
+      } else {
+        systemPromptWithContext += `\n- Correo: No disponible (pídelo solo cuando sea necesario o al final de una conversación productiva)`;
+      }
+    }
+
     // Preparar mensajes para la IA
     const messages = [
-      { role: "system", content: this.systemPrompt },
+      { role: "system", content: systemPromptWithContext },
       ...conversationHistory,
     ];
 
@@ -521,28 +560,6 @@ class WhatsAppBot {
     }
   }
 
-  async handleInitialDataCollection(userId, userMessage, state) {
-    switch (state) {
-      case "none":
-        // Primera vez, dar bienvenida y solicitar nombre
-        const welcomeMessage = `¡Hola! 👋 Bienvenido a nuestro servicio de atención.\n\nPara brindarte una mejor experiencia personalizada, ¿podrías decirme tu nombre completo por favor?`;
-        await userDataManager.setUserData(userId, {});
-        return welcomeMessage;
-
-      case "name_pending":
-        // Validar y guardar nombre
-        const name = userMessage.trim();
-        if (userDataManager.isValidName(name)) {
-          await userDataManager.setUserData(userId, { name: name });
-          await userDataManager.markNameCollected(userId);
-          return `¡Mucho gusto.\n\nEstoy aquí para brindarte información precisa sobre:\n• Ubicación estratégica de parques industriales\n• Metraje disponible y especificaciones técnicas\n• Precios y planes de financiamiento\n• Proyecciones de plusvalía\n• Contexto de crecimiento industrial y comercial en la zona\n\n¿En qué puedo ayudarte hoy?`;
-        } else {
-          return `Por favor, ingresa un nombre válido (solo letras y espacios, mínimo 2 caracteres). ¿Cuál es tu nombre completo?`;
-        }
-    }
-
-    return null; // Continuar con el flujo normal
-  }
 
   async handleEmailCollection(userId, userMessage, chatId) {
     // Validar y guardar email
