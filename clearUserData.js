@@ -4,6 +4,9 @@ async function clearUserData(userId) {
     try {
         console.log(`🔄 Eliminando datos personales para usuario: ${userId}\n`);
 
+        // Esperar a que se carguen los datos
+        await userDataManager.loadData();
+
         // Verificar si el usuario existe
         const userData = await userDataManager.getUserData(userId);
 
