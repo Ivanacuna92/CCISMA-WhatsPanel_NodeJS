@@ -318,10 +318,17 @@ class WhatsAppBot {
       return await this.handleEmailCollection(userId, userMessage, chatId);
     }
 
-    // Si es usuario nuevo, dar bienvenida simple SIN pedir datos inmediatamente
+    // Si es usuario nuevo, dar bienvenida y pedir nombre (pero no bloquear)
     if (dataCollectionState === "none") {
       await userDataManager.setUserData(userId, {});
-      // No bloqueamos la conversación, solo inicializamos el usuario
+
+      // Agregar el mensaje del usuario primero
+      await sessionManager.addMessage(userId, "user", userMessage, chatId);
+
+      // Dar bienvenida y pedir nombre de forma casual
+      const welcomeMessage = `¡Hola! Soy Daniel, asistente de Navetec.\n\n¿Cómo puedo llamarte?`;
+      await sessionManager.addMessage(userId, "assistant", welcomeMessage, chatId);
+      return welcomeMessage;
     }
 
     // Detectar si el usuario está proporcionando un email o nombre directamente
