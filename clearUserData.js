@@ -1,4 +1,6 @@
 const userDataManager = require('./src/services/userDataManager');
+const sessionManager = require('./src/services/sessionManager');
+const database = require('./src/services/database');
 
 async function clearUserData(userId) {
     try {
@@ -11,19 +13,38 @@ async function clearUserData(userId) {
         const userData = await userDataManager.getUserData(userId);
 
         if (!userData) {
-            console.log(`   ℹ️  No se encontraron datos para el usuario ${userId}\n`);
-            process.exit(0);
+            console.log(`   ℹ️  No se encontraron datos personales para el usuario ${userId}`);
+        } else {
+            console.log('Datos actuales:');
+            console.log(`   - Nombre: ${userData.name || 'No disponible'}`);
+            console.log(`   - Correo: ${userData.email || 'No disponible'}`);
+            console.log(`   - Creado: ${userData.createdAt || 'No disponible'}\n`);
         }
 
-        console.log('Datos actuales:');
-        console.log(`   - Nombre: ${userData.name || 'No disponible'}`);
-        console.log(`   - Correo: ${userData.email || 'No disponible'}`);
-        console.log(`   - Creado: ${userData.createdAt || 'No disponible'}\n`);
-
-        // Eliminar datos del usuario
+        // 1. Eliminar datos personales del usuario
+        console.log('1. Eliminando datos personales...');
         await userDataManager.deleteUserData(userId);
+        console.log('   ✅ Datos personales eliminados\n');
 
-        console.log('✅ Datos personales eliminados exitosamente');
+        // 2. Limpiar sesión del cache local
+        console.log('2. Limpiando sesión activa en memoria...');
+        if (sessionManager.localCache && sessionManager.localCache.has(userId)) {
+            sessionManager.localCache.delete(userId);
+            console.log('   ✅ Sesión eliminada del cache\n');
+        } else {
+            console.log('   ℹ️  No hay sesión activa en cache\n');
+        }
+
+        // 3. Limpiar sesión de la base de datos
+        console.log('3. Limpiando sesión de la base de datos...');
+        try {
+            await database.query('DELETE FROM user_sessions WHERE user_id = ?', [userId]);
+            console.log('   ✅ Sesión eliminada de la base de datos\n');
+        } catch (dbError) {
+            console.log('   ℹ️  No se pudo limpiar la base de datos (puede no estar configurada)\n');
+        }
+
+        console.log('✅ Limpieza completa exitosa');
         console.log(`📝 El usuario ${userId} ahora es tratado como nuevo cliente\n`);
 
         process.exit(0);
