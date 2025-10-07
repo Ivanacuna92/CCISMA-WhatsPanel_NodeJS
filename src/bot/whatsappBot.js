@@ -325,8 +325,8 @@ class WhatsAppBot {
       // Agregar el mensaje del usuario primero
       await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
-      // Dar bienvenida y pedir nombre de forma casual
-      const welcomeMessage = `¡Hola! Soy Daniel, asistente de Navetec.\n\n¿Cómo puedo llamarte?`;
+      // Dar bienvenida y pedir nombre de forma educada
+      const welcomeMessage = `¡Hola! Soy Daniel, asistente virtual de Navetec.\n\n¿Con quién tengo el gusto?\n\n_Por favor, proporciona únicamente tu nombre._`;
       await sessionManager.addMessage(userId, "assistant", welcomeMessage, chatId);
       return welcomeMessage;
     }
