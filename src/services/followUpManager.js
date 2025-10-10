@@ -7,6 +7,7 @@ class FollowUpManager {
         this.followUps = new Map(); // Cache local para seguimientos activos
         this.checkInterval = 2 * 60 * 60 * 1000; // 2 horas (revisión en producción)
         this.followUpInterval = 24 * 60 * 60 * 1000; // 24 horas entre seguimientos
+        this.timerInterval = null; // Referencia al interval para poder limpiarlo
     }
 
     async initialize() {
@@ -266,10 +267,17 @@ Responde ÚNICAMENTE con una de estas palabras: ACEPTADO, RECHAZADO, FRUSTRADO, 
     }
 
     startFollowUpTimer(sock, aiService, sessionManager) {
+        // Limpiar interval existente si hay uno
+        if (this.timerInterval) {
+            console.log('[FollowUp] ⚠️ Limpiando timer existente antes de crear uno nuevo');
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+        }
+
         console.log('✓ Timer de seguimiento iniciado (revisión cada 2 horas)');
         console.log(`✓ Intervalo de seguimiento: 24 horas`);
 
-        setInterval(() => {
+        this.timerInterval = setInterval(() => {
             this.checkPendingFollowUps(sock, aiService, sessionManager);
         }, this.checkInterval);
     }

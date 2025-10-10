@@ -6,6 +6,8 @@ const database = require('./database');
 class SessionManager {
     constructor() {
         this.localCache = new Map(); // Cache local para rendimiento
+        this.cleanupTimerInterval = null; // Referencia al interval de limpieza
+        this.syncTimerInterval = null; // Referencia al interval de sincronización
     }
 
     async getSession(userId, chatId = null) {
@@ -200,7 +202,14 @@ class SessionManager {
     }
 
     startCleanupTimer(sock, followUpManager = null) {
-        setInterval(() => {
+        // Limpiar interval existente si hay uno
+        if (this.cleanupTimerInterval) {
+            console.log('[SessionManager] ⚠️ Limpiando timer de limpieza existente antes de crear uno nuevo');
+            clearInterval(this.cleanupTimerInterval);
+            this.cleanupTimerInterval = null;
+        }
+
+        this.cleanupTimerInterval = setInterval(() => {
             this.checkInactiveSessions(sock, followUpManager);
         }, config.checkInterval);
     }
@@ -225,7 +234,14 @@ class SessionManager {
     
     // Iniciar sincronización periódica
     startSyncTimer() {
-        setInterval(() => {
+        // Limpiar interval existente si hay uno
+        if (this.syncTimerInterval) {
+            console.log('[SessionManager] ⚠️ Limpiando timer de sincronización existente antes de crear uno nuevo');
+            clearInterval(this.syncTimerInterval);
+            this.syncTimerInterval = null;
+        }
+
+        this.syncTimerInterval = setInterval(() => {
             this.syncCacheWithDB();
         }, 30000); // Sincronizar cada 30 segundos
     }
