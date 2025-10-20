@@ -4,7 +4,7 @@ const {
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
   fetchLatestBaileysVersion,
-  makeInMemoryStore,
+  // makeInMemoryStore, // No disponible en Baileys v6+
 } = require("baileys");
 const qrcode = require("qrcode-terminal");
 const pino = require("pino");
@@ -54,9 +54,9 @@ class WhatsAppBot {
       );
 
       // Crear store en memoria para manejar mensajes
-      this.store = makeInMemoryStore({
-        logger: pino({ level: "silent" }),
-      });
+      // this.store = makeInMemoryStore({
+      //   logger: pino({ level: "silent" }),
+      // });
 
       // Crear socket de WhatsApp con configuración mejorada para producción
       this.sock = makeWASocket({
@@ -74,11 +74,11 @@ class WhatsAppBot {
         generateHighQualityLinkPreview: false,
         syncFullHistory: false,
         getMessage: async (key) => {
-          if (this.store) {
-            const msg = await this.store.loadMessage(key.remoteJid, key.id);
-            return msg?.message || undefined;
-          }
-          return { conversation: "No disponible" };
+          // if (this.store) {
+          //   const msg = await this.store.loadMessage(key.remoteJid, key.id);
+          //   return msg?.message || undefined;
+          // }
+          return undefined;
         },
         defaultQueryTimeoutMs: undefined,
         connectTimeoutMs: 60000,
@@ -92,9 +92,9 @@ class WhatsAppBot {
       });
 
       // Vincular store al socket
-      if (this.store) {
-        this.store.bind(this.sock.ev);
-      }
+      // if (this.store) {
+      //   this.store.bind(this.sock.ev);
+      // }
 
       // Guardar credenciales cuando se actualicen
       this.sock.ev.on("creds.update", saveCreds);
