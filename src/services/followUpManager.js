@@ -124,23 +124,50 @@ class FollowUpManager {
                 console.log(`  - Intervalo requerido: 24 horas`);
 
                 if (timeSinceLastFollowUp >= this.followUpInterval) {
-                    console.log(`  - ✅ Tiempo cumplido, generando mensaje...`);
+                    console.log(`  - ✅ Tiempo cumplido, verificando estado de conversación...`);
+
+                    // VERIFICACIÓN CRÍTICA: Analizar el estado de la conversación antes de enviar
+                    const messages = await sessionManager.getMessages(userId);
+                    const lastUserMessage = messages.filter(m => m.role === 'user').slice(-1)[0];
+
+                    if (lastUserMessage) {
+                        const conversationStatus = await aiService.analyzeConversationStatus(
+                            messages,
+                            lastUserMessage.content
+                        );
+
+                        console.log(`  - 🔍 Estado detectado: ${conversationStatus}`);
+
+                        // Si el cliente ya rechazó, aceptó o está frustrado, NO enviar seguimiento
+                        if (['ACEPTADO', 'RECHAZADO', 'FRUSTRADO'].includes(conversationStatus)) {
+                            console.log(`  - 🛑 SEGUIMIENTO CANCELADO: Cliente en estado ${conversationStatus}`);
+                            await this.stopFollowUp(userId, conversationStatus.toLowerCase());
+                            continue; // Saltar al siguiente usuario
+                        }
+                    }
 
                     // Generar mensaje de seguimiento usando IA
-                    const followUpMessage = await this.generateFollowUpMessage(
+                    const followUpResult = await this.generateFollowUpMessage(
                         userId,
                         followUp.followUpCount,
                         aiService,
                         sessionManager
                     );
 
-                    console.log(`  - 📝 Mensaje generado: "${followUpMessage.substring(0, 50)}..."`);
+                    console.log(`  - 📝 Mensaje generado: "${followUpResult.message.substring(0, 50)}..."`);
+
+                    // Verificar si se debe detener el seguimiento
+                    if (followUpResult.shouldStop) {
+                        console.log(`  - 🛑 La IA determinó que no se debe continuar el seguimiento`);
+                        await this.stopFollowUp(userId, 'ia_determino_detener');
+                        continue;
+                    }
 
                     // Enviar mensaje
                     if (followUp.chatId && sock) {
                         console.log(`  - 📤 Enviando mensaje a ${followUp.chatId}...`);
-                        await sock.sendMessage(followUp.chatId, { text: followUpMessage });
-                        await logger.log('BOT', followUpMessage, userId);
+                        await sock.sendMessage(followUp.chatId, { text: followUpResult.message });
+                        await logger.log('BOT', followUpResult.message, userId);
 
                         // Actualizar contador y timestamp
                         followUp.followUpCount++;
@@ -182,12 +209,49 @@ class FollowUpManager {
             // Obtener historial de conversación
             const messages = await sessionManager.getMessages(userId);
 
-            // Crear prompt para generar mensaje de seguimiento
+            // VERIFICACIÓN CRÍTICA: Analizar si el cliente ya dio señales de rechazo o aceptación
+            const lastUserMessage = messages.filter(m => m.role === 'user').slice(-1)[0];
+
+            if (lastUserMessage) {
+                const detectionPrompt = {
+                    role: 'system',
+                    content: `Analiza esta conversación y determina si el cliente ha dado señales claras de:
+1. RECHAZO: Dijo "no me interesa", "no gracias", "no es para mí", "ya no quiero más información"
+2. ACEPTACIÓN: Pidió agendar cita, proporcionó datos de contacto, confirmó interés explícito
+3. FRUSTRACIÓN: Pide que dejen de contactarlo, muestra enojo, se queja de insistencia
+4. CONTINUAR: Ninguna de las anteriores (cliente puede seguir interesado)
+
+Responde ÚNICAMENTE con: RECHAZO, ACEPTACIÓN, FRUSTRACIÓN, o CONTINUAR`
+                };
+
+                const detectionUserPrompt = {
+                    role: 'user',
+                    content: `Analiza si este cliente debe seguir recibiendo seguimientos.`
+                };
+
+                const detectionMessages = [detectionPrompt, ...messages, detectionUserPrompt];
+                const detectionResponse = await aiService.generateResponse(detectionMessages);
+                const shouldContinue = detectionResponse.trim().toUpperCase();
+
+                console.log(`  - 🔍 Análisis de continuación: ${shouldContinue}`);
+
+                // Si NO debe continuar, retornar sin mensaje
+                if (['RECHAZO', 'ACEPTACIÓN', 'FRUSTRACIÓN'].includes(shouldContinue)) {
+                    return {
+                        message: '[No se genera mensaje de seguimiento - el cliente ha solicitado explícitamente no recibir más contactos]',
+                        shouldStop: true
+                    };
+                }
+            }
+
+            // Si pasa la verificación, generar mensaje de seguimiento
             const systemPrompt = {
                 role: 'system',
                 content: `Eres Daniel de Navetec. El cliente dejó de responder hace 24 horas.
 
 Esta es la conversación #${followUpCount + 1} de seguimiento.
+
+ANÁLISIS PREVIO: Ya verificamos que el cliente NO ha rechazado explícitamente ni está frustrado.
 
 IMPORTANTE:
 - NO uses emojis
@@ -195,7 +259,7 @@ IMPORTANTE:
 - Retoma el contexto de la conversación anterior
 - Si es el primer seguimiento (count 0): pregunta si aún está interesado y si tiene dudas
 - Si es el segundo seguimiento (count 1): ofrece alternativas o menciona beneficios adicionales
-- Si es el tercer seguimiento (count 2): menciona que es el último contacto y ofrece dejar información de contacto directo
+- Si es el tercer seguimiento (count 2 o mayor): menciona que es el último contacto y ofrece dejar información de contacto directo
 - Máximo 2-3 líneas
 
 Genera SOLO el mensaje de seguimiento, sin explicaciones adicionales.`
@@ -209,7 +273,13 @@ Genera SOLO el mensaje de seguimiento, sin explicaciones adicionales.`
             const aiMessages = [systemPrompt, ...messages, userPrompt];
             const response = await aiService.generateResponse(aiMessages);
 
-            return response;
+            // Si es el tercer seguimiento o superior, marcar para detener después de este
+            const shouldStopAfter = followUpCount >= 2;
+
+            return {
+                message: response,
+                shouldStop: shouldStopAfter
+            };
         } catch (error) {
             console.error('Error generando mensaje de seguimiento:', error);
 
@@ -220,7 +290,12 @@ Genera SOLO el mensaje de seguimiento, sin explicaciones adicionales.`
                 'Hola, este será mi último mensaje de seguimiento. Si desea información adicional, estamos a su disposición.'
             ];
 
-            return fallbackMessages[Math.min(followUpCount, 2)];
+            const shouldStopAfter = followUpCount >= 2;
+
+            return {
+                message: fallbackMessages[Math.min(followUpCount, 2)],
+                shouldStop: shouldStopAfter
+            };
         }
     }
 

@@ -43,13 +43,27 @@ class AIService {
                 role: 'system',
                 content: `Analiza esta conversación y determina si se cumple alguna de estas condiciones:
 
-1. ACEPTADO: El cliente mostró intención clara de proceder (pidió cita, proporcionó correo, confirmó interés explícito, dijo que quiere avanzar)
-2. RECHAZADO: El cliente rechazó explícitamente la oferta (dijo "no me interesa", "no gracias", "no es para mí", "no quiero")
-3. FRUSTRADO: El cliente muestra frustración o enojo (usa lenguaje negativo fuerte, se queja de insistencia, pide que dejen de contactarlo, muestra molestia clara)
-4. ACTIVO: La conversación sigue activa y productiva (hace preguntas, responde con interés, pide información)
+1. ACEPTADO: El cliente mostró intención clara de proceder
+   - Ejemplos: "quiero agendar", "sí me interesa", "manda la información", "proporciono mi correo", "vamos con eso"
+
+2. RECHAZADO: El cliente rechazó explícitamente la oferta
+   - Ejemplos: "no me interesa", "no gracias", "no es para mí", "no quiero", "gracias pero no", "ya no me interesa"
+
+3. FRUSTRADO: El cliente pide explícitamente que dejen de contactarlo o muestra enojo claro
+   - Ejemplos: "ya no me contacten", "dejen de escribirme", "no quiero más mensajes", "están molestando", "ya es mucho"
+   - IMPORTANTE: Solo usa FRUSTRADO si hay lenguaje EXPLÍCITO de molestia. No lo uses solo porque dijo "no".
+
+4. ACTIVO: La conversación sigue activa y productiva
+   - Ejemplos: hace preguntas, pide más información, muestra interés genuino, responde constructivamente
+
 5. INACTIVO: El cliente dejó de responder sin señales claras
 
-IMPORTANTE: Sé conservador con FRUSTRADO - solo úsalo si hay señales MUY claras de enojo o molestia explícita.
+REGLAS CRÍTICAS:
+- Si dice "no" una sola vez SIN pedir que dejen de contactarlo = RECHAZADO (NO FRUSTRADO)
+- Si dice "no me interesa" o "no gracias" = RECHAZADO (NO FRUSTRADO)
+- Si dice "ya no quiero saber más" o "no me contacten más" = FRUSTRADO
+- Si proporciona datos de contacto o confirma cita = ACEPTADO
+- Si hace preguntas o muestra curiosidad = ACTIVO
 
 Responde ÚNICAMENTE con una de estas palabras: ACEPTADO, RECHAZADO, FRUSTRADO, ACTIVO, o INACTIVO`
             };
