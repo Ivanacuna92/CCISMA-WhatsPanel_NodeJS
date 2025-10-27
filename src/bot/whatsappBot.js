@@ -17,6 +17,7 @@ const humanModeManager = require("../services/humanModeManager");
 const conversationAnalyzer = require("../services/conversationAnalyzer");
 const userDataManager = require("../services/userDataManager");
 const followUpManager = require("../services/followUpManager");
+const database = require("../services/database");
 
 class WhatsAppBot {
   constructor() {
@@ -155,6 +156,19 @@ class WhatsAppBot {
           this.reconnectAttempts = 0;
           this.isReconnecting = false;
           logger.log("SYSTEM", "Bot iniciado correctamente con Baileys");
+
+          // Procesar mensajes que llegaron mientras el bot estaba desconectado
+          console.log(
+            "🔄 Verificando mensajes pendientes de cuando el bot estaba desconectado..."
+          );
+          setTimeout(() => {
+            this.processPendingMessages().catch((err) => {
+              console.error(
+                "[PendingMessages] Error al procesar mensajes pendientes:",
+                err
+              );
+            });
+          }, 3000); // Esperar 3 segundos para que el bot se estabilice
 
           // Inicializar follow-up manager
           followUpManager.initialize().then(() => {
@@ -681,6 +695,193 @@ class WhatsAppBot {
       // Solo confirmación de email sin activar soporte
       return `¡Gracias ${userData.name}! ✅\n\nHe registrado tu correo: ${email}\n\n¿En qué más puedo ayudarte?`;
     }
+  }
+
+  /**
+   * Procesa mensajes que llegaron mientras el bot estaba desconectado
+   * Se ejecuta automáticamente al conectarse el bot
+   */
+  async processPendingMessages() {
+    try {
+      console.log(
+        "[PendingMessages] 🔍 Buscando chats con mensajes no leídos..."
+      );
+
+      let processedCount = 0;
+      let errorCount = 0;
+      let checkedChats = 0;
+
+      try {
+        // Obtener usuarios de las sesiones activas en la base de datos
+        const activeSessions = await database.query(
+          'SELECT user_id, chat_id, last_activity FROM user_sessions WHERE last_activity > DATE_SUB(NOW(), INTERVAL 7 DAY) AND chat_id IS NOT NULL'
+        );
+
+        console.log(
+          `[PendingMessages] 📊 Verificando ${activeSessions.length} sesiones recientes...`
+        );
+
+        // Revisar cada sesión para ver si hay mensajes nuevos
+        for (const session of activeSessions) {
+          try {
+            const chatId = session.chat_id;
+
+            if (!chatId || chatId === 'null') continue;
+
+            checkedChats++;
+
+            // Intentar obtener los últimos 5 mensajes del chat
+            const messages = await this.sock.fetchMessagesFromWA(chatId, 5);
+
+            if (!messages || messages.length === 0) continue;
+
+            // Filtrar mensajes que:
+            // 1. No son nuestros (fromMe = false)
+            // 2. Son más recientes que la última actividad registrada
+            // 3. Tienen contenido de texto
+            const lastActivity = new Date(session.last_activity).getTime();
+            const newMessages = messages.filter(
+              (msg) =>
+                !msg.key.fromMe &&
+                msg.messageTimestamp * 1000 > lastActivity &&
+                msg.message &&
+                (msg.message.conversation ||
+                  msg.message.extendedTextMessage?.text)
+            );
+
+            if (newMessages.length > 0) {
+              console.log(
+                `[PendingMessages] 📬 Encontrados ${newMessages.length} mensajes nuevos en chat ${session.user_id}`
+              );
+
+              // Procesar cada mensaje nuevo
+              for (const msg of newMessages) {
+                try {
+                  await this.processUnreadMessage(msg);
+                  processedCount++;
+
+                  // Pequeña pausa entre mensajes
+                  await new Promise((resolve) => setTimeout(resolve, 1000));
+                } catch (error) {
+                  console.error(
+                    `[PendingMessages] ❌ Error procesando mensaje:`,
+                    error.message
+                  );
+                  errorCount++;
+                }
+              }
+            }
+          } catch (error) {
+            // Error obteniendo mensajes de un chat específico, continuar con el siguiente
+            if (error.message && !error.message.includes('404')) {
+              console.log(
+                `[PendingMessages] ⚠️ No se pudieron obtener mensajes de un chat: ${error.message}`
+              );
+            }
+          }
+        }
+
+        if (checkedChats === 0) {
+          console.log(
+            "[PendingMessages] ℹ️ No hay sesiones recientes para verificar"
+          );
+        } else if (processedCount === 0) {
+          console.log(
+            `[PendingMessages] ℹ️ Se verificaron ${checkedChats} chats, no hay mensajes pendientes`
+          );
+        } else {
+          console.log(
+            `[PendingMessages] ✅ Procesados ${processedCount} mensajes pendientes de ${checkedChats} chats revisados`
+          );
+          await logger.log(
+            "SYSTEM",
+            `Procesados ${processedCount} mensajes pendientes al reconectarse`
+          );
+        }
+
+        if (errorCount > 0) {
+          console.log(
+            `[PendingMessages] ⚠️ ${errorCount} mensajes con errores al procesar`
+          );
+        }
+      } catch (dbError) {
+        console.error(
+          "[PendingMessages] ⚠️ Error consultando base de datos:",
+          dbError.message
+        );
+        console.log(
+          "[PendingMessages] ℹ️ El bot procesará mensajes normalmente cuando lleguen nuevos"
+        );
+      }
+    } catch (error) {
+      console.error(
+        "[PendingMessages] ❌ Error general procesando mensajes pendientes:",
+        error.message
+      );
+      console.log(
+        "[PendingMessages] ℹ️ El bot continuará funcionando normalmente para mensajes nuevos"
+      );
+    }
+  }
+
+  /**
+   * Procesa un mensaje no leído individual
+   * @param {Object} msg - Mensaje de WhatsApp
+   */
+  async processUnreadMessage(msg) {
+    const from = msg.key.remoteJid;
+    const userId = from.replace("@s.whatsapp.net", "");
+    const userName = msg.pushName || userId;
+    const chatId = from;
+
+    // Obtener el texto del mensaje
+    const conversation =
+      msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+
+    if (!conversation || conversation.trim() === "") {
+      return;
+    }
+
+    console.log(
+      `[PendingMessages] 💬 Procesando mensaje de ${userName}: "${conversation.substring(
+        0,
+        50
+      )}..."`
+    );
+
+    // Verificar si está en modo humano o soporte
+    const isHuman = await humanModeManager.isHumanMode(userId);
+    const isSupport = await humanModeManager.isSupportMode(userId);
+
+    if (isHuman || isSupport) {
+      console.log(
+        `[PendingMessages] ⚠️ Usuario ${userId} en modo ${
+          isSupport ? "SOPORTE" : "HUMANO"
+        }, no se responde automáticamente`
+      );
+      // Guardar el mensaje en el historial pero no responder
+      await sessionManager.addMessage(userId, "user", conversation, chatId);
+      await logger.log("USER", conversation, userId, userName);
+      return;
+    }
+
+    // Agregar mensaje al log
+    await logger.log("USER", conversation, userId, userName);
+
+    // Generar respuesta con IA
+    const aiResponse = await this.generateAIResponse(
+      userId,
+      userName,
+      conversation,
+      chatId
+    );
+
+    // Enviar respuesta
+    await this.sock.sendMessage(from, { text: aiResponse });
+    console.log(`[PendingMessages] ✅ Respuesta enviada a ${userName}`);
+
+    // Registrar respuesta en logs
+    await logger.log("BOT", aiResponse, userId);
   }
 }
 
