@@ -59,13 +59,41 @@ class DatabaseInit {
                 CREATE TABLE IF NOT EXISTS user_sessions (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     user_id VARCHAR(50) UNIQUE NOT NULL,
+                    chat_id VARCHAR(255) NULL,
                     messages TEXT,
                     last_activity DATETIME NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     INDEX idx_user_id (user_id),
+                    INDEX idx_chat_id (chat_id),
                     INDEX idx_last_activity (last_activity)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             `);
+
+            // Agregar columna chat_id si no existe (para instalaciones existentes)
+            try {
+                await database.query(`
+                    ALTER TABLE user_sessions
+                    ADD COLUMN IF NOT EXISTS chat_id VARCHAR(255) NULL AFTER user_id
+                `);
+            } catch (error) {
+                // Ignorar error si la columna ya existe
+                if (!error.message.includes('Duplicate column')) {
+                    console.log('Nota: chat_id ya existe en user_sessions o error al agregar:', error.message);
+                }
+            }
+
+            // Agregar índice para chat_id si no existe
+            try {
+                await database.query(`
+                    ALTER TABLE user_sessions
+                    ADD INDEX IF NOT EXISTS idx_chat_id (chat_id)
+                `);
+            } catch (error) {
+                // Ignorar error si el índice ya existe
+                if (!error.message.includes('Duplicate key')) {
+                    console.log('Nota: índice idx_chat_id ya existe o error al agregar:', error.message);
+                }
+            }
 
             // Crear tabla de estados de modo humano/soporte
             await database.query(`

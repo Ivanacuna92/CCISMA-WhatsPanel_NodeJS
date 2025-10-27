@@ -22,23 +22,28 @@ class SessionManager {
         try {
             // Buscar en base de datos
             const dbSession = await database.findOne('user_sessions', 'user_id = ?', [userId]);
-            
+
             if (dbSession) {
                 const session = {
                     messages: JSON.parse(dbSession.messages || '[]'),
                     lastActivity: Date.now(),
-                    chatId: chatId,
+                    chatId: chatId || dbSession.chat_id, // Usar chatId de BD si no se proporciona uno nuevo
                     mode: 'ai'
                 };
                 this.localCache.set(userId, session);
-                
-                // Actualizar última actividad en BD
-                await database.update('user_sessions', 
-                    { last_activity: new Date() }, 
-                    'user_id = ?', 
+
+                // Actualizar última actividad y chat_id en BD si es necesario
+                const updateData = { last_activity: new Date() };
+                if (chatId && chatId !== dbSession.chat_id) {
+                    updateData.chat_id = chatId;
+                }
+
+                await database.update('user_sessions',
+                    updateData,
+                    'user_id = ?',
                     [userId]
                 );
-                
+
                 return session;
             } else {
                 // Crear nueva sesión
@@ -48,13 +53,14 @@ class SessionManager {
                     chatId: chatId,
                     mode: 'ai'
                 };
-                
+
                 await database.insert('user_sessions', {
                     user_id: userId,
+                    chat_id: chatId,
                     messages: '[]',
                     last_activity: new Date()
                 });
-                
+
                 this.localCache.set(userId, session);
                 return session;
             }
@@ -76,17 +82,25 @@ class SessionManager {
         const session = await this.getSession(userId, chatId);
         session.messages.push({ role, content, timestamp: new Date().toISOString() });
         session.lastActivity = Date.now();
-        
+
         // Actualizar en cache local
         this.localCache.set(userId, session);
-        
+
         // Actualizar en base de datos
         try {
+            const updateData = {
+                messages: JSON.stringify(session.messages),
+                last_activity: new Date()
+            };
+
+            // Actualizar chat_id si se proporciona y es diferente
+            if (chatId && chatId !== session.chatId) {
+                updateData.chat_id = chatId;
+                session.chatId = chatId;
+            }
+
             await database.update('user_sessions',
-                {
-                    messages: JSON.stringify(session.messages),
-                    last_activity: new Date()
-                },
+                updateData,
                 'user_id = ?',
                 [userId]
             );
@@ -177,10 +191,17 @@ class SessionManager {
 
                 if (!hasActiveFollowUp && followUpManager) {
                     console.log(`  - 🚀 INICIANDO SEGUIMIENTO para ${userId}`);
-                    // NO enviar mensaje de finalización
-                    // En su lugar, iniciar seguimiento automático
-                    await followUpManager.startFollowUp(userId, session.chatId);
-                    await logger.log('SYSTEM', 'Seguimiento automático iniciado por inactividad de 5 minutos', userId);
+
+                    // Validar que tengamos un chatId antes de iniciar el seguimiento
+                    if (!session.chatId) {
+                        console.log(`  - ❌ No se puede iniciar seguimiento: chatId es null para usuario ${userId}`);
+                        console.log(`  - 💡 Esto puede ocurrir si la sesión se cargó desde BD sin chatId`);
+                    } else {
+                        // NO enviar mensaje de finalización
+                        // En su lugar, iniciar seguimiento automático
+                        await followUpManager.startFollowUp(userId, session.chatId);
+                        await logger.log('SYSTEM', 'Seguimiento automático iniciado por inactividad de 5 minutos', userId);
+                    }
                 } else {
                     console.log(`  - ⏭️ Seguimiento ya existe o followUpManager no disponible`);
                 }
@@ -221,6 +242,7 @@ class SessionManager {
                 await database.update('user_sessions',
                     {
                         messages: JSON.stringify(session.messages),
+                        chat_id: session.chatId,
                         last_activity: new Date(session.lastActivity)
                     },
                     'user_id = ?',
