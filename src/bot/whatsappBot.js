@@ -300,8 +300,51 @@ class WhatsAppBot {
 
         // Enviar respuesta solo si tenemos una respuesta válida
         if (response && response.trim() !== "") {
-          await this.sock.sendMessage(from, { text: response });
-          await logger.log("bot", response, userId, userName);
+          try {
+            // Verificar si el contacto existe antes de enviar
+            try {
+              await this.sock.onWhatsApp(userId + '@s.whatsapp.net');
+            } catch (presenceError) {
+              console.log(`[WhatsApp] ⚠️ No se pudo verificar presencia de ${userId}, intentando enviar de todos modos...`);
+            }
+
+            // Enviar estado de "escribiendo" antes del mensaje
+            try {
+              await this.sock.sendPresenceUpdate('composing', from);
+              await new Promise(resolve => setTimeout(resolve, 300));
+            } catch (presenceErr) {
+              // Ignorar errores de presencia
+            }
+
+            // Enviar mensaje
+            const sendResult = await this.sock.sendMessage(from, {
+              text: response
+            }, {
+              // Opciones adicionales para mejorar la entrega
+              cachedGroupMetadata: undefined
+            });
+
+            console.log(`[WhatsApp] ✅ Mensaje enviado exitosamente a ${userId}`);
+            console.log(`[WhatsApp] ID del mensaje: ${sendResult?.key?.id}`);
+            console.log(`[WhatsApp] Chat ID: ${from}`);
+            console.log(`[WhatsApp] Status del mensaje:`, sendResult?.status || 'enviado');
+
+            // Enviar estado de "disponible" después del mensaje
+            try {
+              await this.sock.sendPresenceUpdate('available', from);
+            } catch (presenceErr) {
+              // Ignorar errores de presencia
+            }
+
+            await logger.log("bot", response, userId, userName);
+          } catch (sendError) {
+            console.error(`[WhatsApp] ❌ Error enviando mensaje a ${userId}:`, sendError);
+            console.error(`[WhatsApp] Chat ID que falló: ${from}`);
+            console.error(`[WhatsApp] Tipo de error:`, sendError.message);
+            console.error(`[WhatsApp] Stack trace:`, sendError.stack);
+            // Re-lanzar el error para que se maneje en el catch principal
+            throw sendError;
+          }
         }
 
         // Analizar estado de la conversación después de la respuesta
@@ -877,8 +920,30 @@ class WhatsAppBot {
     );
 
     // Enviar respuesta
-    await this.sock.sendMessage(from, { text: aiResponse });
-    console.log(`[PendingMessages] ✅ Respuesta enviada a ${userName}`);
+    try {
+      // Enviar estado de "escribiendo"
+      try {
+        await this.sock.sendPresenceUpdate('composing', from);
+        await new Promise(resolve => setTimeout(resolve, 300));
+      } catch (presenceErr) {
+        // Ignorar errores de presencia
+      }
+
+      const sendResult = await this.sock.sendMessage(from, { text: aiResponse });
+      console.log(`[PendingMessages] ✅ Respuesta enviada a ${userName}`);
+      console.log(`[PendingMessages] ID del mensaje: ${sendResult?.key?.id}`);
+      console.log(`[PendingMessages] Status: ${sendResult?.status || 'enviado'}`);
+
+      // Enviar estado de "disponible"
+      try {
+        await this.sock.sendPresenceUpdate('available', from);
+      } catch (presenceErr) {
+        // Ignorar errores de presencia
+      }
+    } catch (sendError) {
+      console.error(`[PendingMessages] ❌ Error enviando mensaje a ${userId}:`, sendError.message);
+      throw sendError;
+    }
 
     // Registrar respuesta en logs
     await logger.log("BOT", aiResponse, userId);
