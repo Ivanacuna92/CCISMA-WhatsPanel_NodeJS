@@ -13,9 +13,6 @@ WhatsApp Bot application with AI-powered responses using DeepSeek API and a Reac
 # Install dependencies
 npm install
 
-# Install system dependencies (Linux only, requires sudo)
-sudo bash install-dependencies.sh
-
 # Start development server with hot reload
 npm run dev
 
@@ -34,9 +31,10 @@ npm run preview
 ### Core Components
 
 1. **WhatsApp Bot** (`src/bot/whatsappBot.js`)
-   - Uses whatsapp-web.js library with Puppeteer for browser automation
+   - Uses @whiskeysockets/baileys library (fork of Baileys, more stable and updated)
    - Handles message events, session management, and QR authentication
    - Integrates with human mode manager for operator takeover functionality
+   - No browser/Chromium dependencies required
 
 2. **AI Service** (`src/services/aiService.js`)
    - Integrates with DeepSeek API for generating intelligent responses
@@ -95,7 +93,7 @@ WEB_PORT=3001
 ### Data Persistence
 - Logs stored in `logs/` directory as daily JSON files
 - Human mode states in `data/human-states.json`
-- WhatsApp session in `.wwebjs_auth/` directory
+- WhatsApp session in `auth_baileys/` directory
 
 ## Important Notes
 
@@ -105,16 +103,4 @@ WEB_PORT=3001
 - Vite config includes ngrok domains for development tunneling
 - No test framework currently configured
 - No linting or formatting tools configured
-
-## Deployment
-
-### Linux Server Requirements
-When deploying to a Linux server, Chromium requires system dependencies. See `DEPLOYMENT.md` for detailed instructions.
-
-Quick install:
-```bash
-sudo bash install-dependencies.sh
-```
-
-### Docker
-A Dockerfile is recommended for production deployment. The bot automatically detects and uses system Chrome if available, otherwise falls back to bundled Chromium.
+- Uses @whiskeysockets/baileys (no browser/Chromium dependencies needed)
