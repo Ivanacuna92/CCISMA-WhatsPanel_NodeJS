@@ -166,7 +166,7 @@ class FollowUpManager {
                     // Enviar mensaje
                     if (followUp.chatId && sock) {
                         console.log(`  - 📤 Enviando mensaje a ${followUp.chatId}...`);
-                        await sock.sendMessage(followUp.chatId, { text: followUpResult.message });
+                        await sock.sendMessage(followUp.chatId, followUpResult.message);
                         await logger.log('BOT', followUpResult.message, userId);
 
                         // Actualizar contador y timestamp

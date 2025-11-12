@@ -1,13 +1,5 @@
-const makeWASocket = require("baileys").default;
-const {
-  DisconnectReason,
-  useMultiFileAuthState,
-  makeCacheableSignalKeyStore,
-  fetchLatestBaileysVersion,
-  // makeInMemoryStore, // No disponible en Baileys v6+
-} = require("baileys");
+const { Client, LocalAuth } = require("whatsapp-web.js");
 const qrcode = require("qrcode-terminal");
-const pino = require("pino");
 const config = require("../config/config");
 const logger = require("../services/logger");
 const aiService = require("../services/aiService");
@@ -21,389 +13,290 @@ const database = require("../services/database");
 
 class WhatsAppBot {
   constructor() {
-    this.sock = null;
+    this.client = null;
     this.systemPrompt = promptLoader.getPrompt();
-    this.store = null;
     this.currentQR = null;
-    this.reconnectAttempts = 0;
-    this.maxReconnectAttempts = 3;
-    this.isReconnecting = false;
+    this.isReady = false;
+    this.messageProcessingQueue = new Map();
   }
 
   async start() {
-    if (this.isReconnecting) {
-      console.log("Ya hay un intento de reconexión en progreso...");
-      return;
-    }
-
-    this.isReconnecting = true;
-    console.log("Iniciando bot de WhatsApp con Baileys...");
+    console.log("Iniciando bot de WhatsApp con whatsapp-web.js...");
     config.validateApiKey();
 
     try {
-      // Configurar autenticación multi-archivo
-      const { state, saveCreds } = await useMultiFileAuthState(
-        "./auth_baileys"
-      );
+      // Crear cliente de WhatsApp con autenticación local
+      const puppeteerConfig = {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu'
+        ]
+      };
 
-      // Obtener versión más reciente de Baileys
-      const { version, isLatest } = await fetchLatestBaileysVersion();
-      console.log(
-        `Usando versión de WhatsApp Web: ${version.join(
-          "."
-        )} (última: ${isLatest})`
-      );
+      // Intentar usar Chrome del sistema en macOS
+      const fs = require('fs');
+      const chromePaths = [
+        '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/usr/bin/google-chrome',
+        '/usr/bin/chromium-browser'
+      ];
 
-      // Crear store en memoria para manejar mensajes
-      // this.store = makeInMemoryStore({
-      //   logger: pino({ level: "silent" }),
-      // });
+      for (const chromePath of chromePaths) {
+        if (fs.existsSync(chromePath)) {
+          console.log(`Usando Chrome del sistema: ${chromePath}`);
+          puppeteerConfig.executablePath = chromePath;
+          break;
+        }
+      }
 
-      // Crear socket de WhatsApp con configuración mejorada para producción
-      this.sock = makeWASocket({
-        version,
-        auth: {
-          creds: state.creds,
-          keys: makeCacheableSignalKeyStore(
-            state.keys,
-            pino({ level: "silent" })
-          ),
-        },
-        printQRInTerminal: false,
-        logger: pino({ level: "silent" }),
-        browser: ["Chrome (Linux)", "", ""],
-        generateHighQualityLinkPreview: false,
-        syncFullHistory: false,
-        getMessage: async (key) => {
-          // if (this.store) {
-          //   const msg = await this.store.loadMessage(key.remoteJid, key.id);
-          //   return msg?.message || undefined;
-          // }
-          return undefined;
-        },
-        defaultQueryTimeoutMs: undefined,
-        connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 30000,
-        qrTimeout: undefined,
-        markOnlineOnConnect: false,
-        msgRetryCounterCache: {},
-        retryRequestDelayMs: 250,
-        maxMsgRetryCount: 5,
-        auth: state,
+      this.client = new Client({
+        authStrategy: new LocalAuth({
+          dataPath: "./.wwebjs_auth"
+        }),
+        puppeteer: puppeteerConfig,
+        webVersionCache: {
+          type: 'remote',
+          remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+        }
       });
 
-      // Vincular store al socket
-      // if (this.store) {
-      //   this.store.bind(this.sock.ev);
-      // }
+      // Evento: QR Code generado
+      this.client.on("qr", (qr) => {
+        console.log("Escanea este código QR con WhatsApp:");
+        console.log("O visita: http://tu-servidor:" + config.webPort + "/qr");
+        this.currentQR = qr;
+        qrcode.generate(qr, { small: true });
+      });
 
-      // Guardar credenciales cuando se actualicen
-      this.sock.ev.on("creds.update", saveCreds);
+      // Evento: Cliente listo
+      this.client.on("ready", async () => {
+        console.log("¡Bot de WhatsApp conectado y listo!");
+        this.currentQR = null;
+        this.isReady = true;
+        logger.log("SYSTEM", "Bot iniciado correctamente con whatsapp-web.js");
 
-      // Manejar actualizaciones de conexión
-      this.sock.ev.on("connection.update", (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        if (qr) {
-          console.log("Escanea este código QR con WhatsApp:");
-          console.log("O visita: http://tu-servidor:4242/qr");
-          this.currentQR = qr;
-          qrcode.generate(qr, { small: true });
-        }
-
-        if (connection === "close") {
-          const statusCode = lastDisconnect?.error?.output?.statusCode;
-          const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-          console.log(
-            "Conexión cerrada debido a",
-            lastDisconnect?.error,
-            ", reconectando:",
-            shouldReconnect
-          );
-
-          // Si es error 405 o 401, limpiar sesión y reiniciar con límite
-          if (statusCode === 405 || statusCode === 401 || statusCode === 403) {
-            this.reconnectAttempts++;
-
-            if (this.reconnectAttempts > this.maxReconnectAttempts) {
-              console.log(
-                "❌ Máximo de intentos de reconexión alcanzado. Por favor usa el botón de reiniciar sesión en /qr"
-              );
-              this.isReconnecting = false;
-              return;
-            }
-
-            console.log(
-              `Error ${statusCode} detectado. Intento ${this.reconnectAttempts}/${this.maxReconnectAttempts}. Limpiando sesión...`
-            );
-            this.clearSession();
-
-            this.isReconnecting = false;
-            setTimeout(() => this.start(), 5000);
-          } else if (
-            shouldReconnect &&
-            statusCode !== DisconnectReason.loggedOut
-          ) {
-            this.reconnectAttempts = 0;
-            this.isReconnecting = false;
-            setTimeout(() => this.start(), 5000);
-          } else {
-            this.isReconnecting = false;
-          }
-        } else if (connection === "open") {
-          console.log("¡Bot de WhatsApp conectado y listo!");
-          this.currentQR = null;
-          this.reconnectAttempts = 0;
-          this.isReconnecting = false;
-          logger.log("SYSTEM", "Bot iniciado correctamente con Baileys");
-
-          // Procesar mensajes que llegaron mientras el bot estaba desconectado
-          console.log(
-            "🔄 Verificando mensajes pendientes de cuando el bot estaba desconectado..."
-          );
-          setTimeout(() => {
-            this.processPendingMessages().catch((err) => {
-              console.error(
-                "[PendingMessages] Error al procesar mensajes pendientes:",
-                err
-              );
-            });
-          }, 3000); // Esperar 3 segundos para que el bot se estabilice
-
-          // Inicializar follow-up manager
-          followUpManager.initialize().then(() => {
-            followUpManager.startFollowUpTimer(
-              this.sock,
-              aiService,
-              sessionManager
+        // Procesar mensajes pendientes
+        console.log(
+          "🔄 Verificando mensajes pendientes de cuando el bot estaba desconectado..."
+        );
+        setTimeout(() => {
+          this.processPendingMessages().catch((err) => {
+            console.error(
+              "[PendingMessages] Error al procesar mensajes pendientes:",
+              err
             );
           });
+        }, 3000);
 
-          // Iniciar timer de limpieza de sesiones con referencia al followUpManager
-          sessionManager.startCleanupTimer(this.sock, followUpManager);
+        // Inicializar follow-up manager
+        followUpManager.initialize().then(() => {
+          followUpManager.startFollowUpTimer(
+            this.client,
+            aiService,
+            sessionManager
+          );
+        });
+
+        // Iniciar timer de limpieza de sesiones
+        sessionManager.startCleanupTimer(this.client, followUpManager);
+      });
+
+      // Evento: Autenticación exitosa
+      this.client.on("authenticated", () => {
+        console.log("Cliente autenticado correctamente");
+      });
+
+      // Evento: Fallo de autenticación
+      this.client.on("auth_failure", (msg) => {
+        console.error("Fallo en la autenticación:", msg);
+        logger.log("ERROR", "Fallo en la autenticación: " + msg);
+      });
+
+      // Evento: Cliente desconectado
+      this.client.on("disconnected", (reason) => {
+        console.log("Cliente desconectado:", reason);
+        this.isReady = false;
+        logger.log("SYSTEM", "Bot desconectado: " + reason);
+      });
+
+      // Evento: Mensaje recibido
+      this.client.on("message", async (msg) => {
+        try {
+          // Log para debugging
+          console.log(
+            "Mensaje recibido - fromMe:",
+            msg.fromMe,
+            "from:",
+            msg.from
+          );
+
+          // Ignorar mensajes propios
+          if (msg.fromMe) {
+            console.log("Ignorando mensaje propio");
+            return;
+          }
+
+          // Solo responder a mensajes privados (no grupos)
+          const chat = await msg.getChat();
+          if (chat.isGroup) {
+            console.log("Ignorando mensaje de grupo");
+            return;
+          }
+
+          // Ignorar mensajes sin texto
+          if (!msg.body || msg.body.trim() === "") {
+            console.log("Mensaje ignorado - Sin contenido de texto");
+            return;
+          }
+
+          // Extraer información del usuario
+          const from = msg.from; // formato: 1234567890@c.us
+          const userId = from.replace("@c.us", "");
+          const contact = await msg.getContact();
+          const userName = contact.pushname || contact.name || userId;
+          const conversation = msg.body;
+
+          // Sistema de debounce para evitar procesamiento duplicado
+          const messageKey = `${userId}_${conversation}_${Date.now()}`;
+
+          // Verificar si ya estamos procesando un mensaje similar
+          const recentKey = Array.from(this.messageProcessingQueue.keys()).find(
+            (key) => {
+              const [id, content] = key.split("_");
+              return id === userId && content === conversation;
+            }
+          );
+
+          if (
+            recentKey &&
+            Date.now() - this.messageProcessingQueue.get(recentKey) < 2000
+          ) {
+            console.log(`Mensaje duplicado ignorado de ${userId}`);
+            return;
+          }
+
+          // Marcar mensaje como en procesamiento
+          this.messageProcessingQueue.set(messageKey, Date.now());
+
+          // Limpiar mensajes antiguos del queue
+          for (const [key, timestamp] of this.messageProcessingQueue.entries()) {
+            if (Date.now() - timestamp > 5000) {
+              this.messageProcessingQueue.delete(key);
+            }
+          }
+
+          await logger.log("cliente", conversation, userId, userName);
+
+          // Verificar si está en modo humano o soporte
+          const isHuman = await humanModeManager.isHumanMode(userId);
+          const isSupport = await humanModeManager.isSupportMode(userId);
+
+          if (isHuman || isSupport) {
+            const mode = isSupport ? "SOPORTE" : "HUMANO";
+            await logger.log(
+              "SYSTEM",
+              `Mensaje ignorado - Modo ${mode} activo para ${userName} (${userId})`
+            );
+            this.messageProcessingQueue.delete(messageKey);
+
+            // Detener seguimiento si está activo
+            if (await followUpManager.isFollowUpActive(userId)) {
+              await followUpManager.stopFollowUp(userId, "modo_humano_activo");
+            }
+
+            return;
+          }
+
+          // Procesar mensaje y generar respuesta
+          const response = await this.processMessage(userId, conversation, from);
+
+          // Enviar respuesta
+          if (response && response.trim() !== "") {
+            try {
+              // Simular estado de "escribiendo"
+              await chat.sendStateTyping();
+              await new Promise(resolve => setTimeout(resolve, 300));
+
+              // Enviar mensaje
+              await msg.reply(response);
+
+              console.log(`[WhatsApp] ✅ Mensaje enviado exitosamente a ${userId}`);
+
+              await logger.log("bot", response, userId, userName);
+            } catch (sendError) {
+              console.error(`[WhatsApp] ❌ Error enviando mensaje a ${userId}:`, sendError);
+              throw sendError;
+            }
+          }
+
+          // Analizar estado de la conversación
+          const conversationHistory = await sessionManager.getMessages(
+            userId,
+            from
+          );
+          const status = await aiService.analyzeConversationStatus(
+            conversationHistory,
+            conversation
+          );
+
+          console.log(
+            `[FollowUp] Estado de conversación para ${userId}: ${status}`
+          );
+
+          // Manejar seguimientos basados en el estado
+          if (
+            status === "ACEPTADO" ||
+            status === "RECHAZADO" ||
+            status === "FRUSTRADO"
+          ) {
+            if (await followUpManager.isFollowUpActive(userId)) {
+              await followUpManager.stopFollowUp(userId, status.toLowerCase());
+            }
+          } else if (status === "ACTIVO") {
+            if (await followUpManager.isFollowUpActive(userId)) {
+              await followUpManager.stopFollowUp(userId, "volvio_activo");
+            }
+          }
+
+          // Eliminar del queue después de procesar
+          this.messageProcessingQueue.delete(messageKey);
+        } catch (error) {
+          await this.handleError(error, msg);
         }
       });
+
+      // Inicializar cliente
+      await this.client.initialize();
     } catch (error) {
       console.error("Error iniciando bot:", error);
-      this.isReconnecting = false;
-
-      if (this.reconnectAttempts < this.maxReconnectAttempts) {
-        this.reconnectAttempts++;
-        console.log(
-          `Reintentando en 5 segundos... (${this.reconnectAttempts}/${this.maxReconnectAttempts})`
-        );
-        setTimeout(() => this.start(), 5000);
-      }
+      logger.log("ERROR", "Error iniciando bot: " + error.message);
+      throw error;
     }
-
-    // Manejar mensajes entrantes
-    this.sock.ev.on("messages.upsert", async (m) => {
-      try {
-        const msg = m.messages[0];
-        if (!msg.message) return;
-
-        // Log para debugging
-        console.log(
-          "Mensaje recibido - fromMe:",
-          msg.key.fromMe,
-          "remoteJid:",
-          msg.key.remoteJid
-        );
-
-        // Ignorar mensajes propios
-        if (msg.key.fromMe) {
-          console.log("Ignorando mensaje propio");
-          return;
-        }
-
-        // Obtener el número del remitente
-        const from = msg.key.remoteJid;
-        const isGroup = from.endsWith("@g.us");
-
-        // Solo responder a mensajes privados
-        if (isGroup) return;
-
-        // Obtener el texto del mensaje
-        const conversation =
-          msg.message.conversation ||
-          msg.message.extendedTextMessage?.text ||
-          "";
-
-        // Ignorar mensajes sin texto
-        if (!conversation || conversation.trim() === "") {
-          console.log("Mensaje ignorado - Sin contenido de texto");
-          return;
-        }
-
-        // Extraer información del usuario
-        const userId = from.replace("@s.whatsapp.net", "");
-        const userName = msg.pushName || userId;
-
-        // Implementar un sistema de debounce para evitar procesamiento duplicado
-        if (!this.messageProcessingQueue) {
-          this.messageProcessingQueue = new Map();
-        }
-
-        // Crear clave única para el mensaje
-        const messageKey = `${userId}_${conversation}_${Date.now()}`;
-
-        // Verificar si ya estamos procesando un mensaje similar
-        const recentKey = Array.from(this.messageProcessingQueue.keys()).find(
-          (key) => {
-            const [id, content] = key.split("_");
-            return id === userId && content === conversation;
-          }
-        );
-
-        if (
-          recentKey &&
-          Date.now() - this.messageProcessingQueue.get(recentKey) < 2000
-        ) {
-          console.log(`Mensaje duplicado ignorado de ${userId}`);
-          return;
-        }
-
-        // Marcar mensaje como en procesamiento
-        this.messageProcessingQueue.set(messageKey, Date.now());
-
-        // Limpiar mensajes antiguos del queue
-        for (const [key, timestamp] of this.messageProcessingQueue.entries()) {
-          if (Date.now() - timestamp > 5000) {
-            this.messageProcessingQueue.delete(key);
-          }
-        }
-
-        await logger.log("cliente", conversation, userId, userName);
-
-        // Verificar si está en modo humano o soporte
-        const isHuman = await humanModeManager.isHumanMode(userId);
-        const isSupport = await humanModeManager.isSupportMode(userId);
-
-        if (isHuman || isSupport) {
-          const mode = isSupport ? "SOPORTE" : "HUMANO";
-          await logger.log(
-            "SYSTEM",
-            `Mensaje ignorado - Modo ${mode} activo para ${userName} (${userId})`
-          );
-          this.messageProcessingQueue.delete(messageKey);
-
-          // Detener seguimiento si está activo (ya está en conversación activa)
-          if (await followUpManager.isFollowUpActive(userId)) {
-            await followUpManager.stopFollowUp(userId, "modo_humano_activo");
-          }
-
-          return;
-        }
-
-        // Procesar mensaje y generar respuesta
-        const response = await this.processMessage(userId, conversation, from);
-
-        // Enviar respuesta solo si tenemos una respuesta válida
-        if (response && response.trim() !== "") {
-          try {
-            // Verificar si el contacto existe antes de enviar
-            try {
-              await this.sock.onWhatsApp(userId + '@s.whatsapp.net');
-            } catch (presenceError) {
-              console.log(`[WhatsApp] ⚠️ No se pudo verificar presencia de ${userId}, intentando enviar de todos modos...`);
-            }
-
-            // Enviar estado de "escribiendo" antes del mensaje
-            try {
-              await this.sock.sendPresenceUpdate('composing', from);
-              await new Promise(resolve => setTimeout(resolve, 300));
-            } catch (presenceErr) {
-              // Ignorar errores de presencia
-            }
-
-            // Enviar mensaje
-            const sendResult = await this.sock.sendMessage(from, {
-              text: response
-            }, {
-              // Opciones adicionales para mejorar la entrega
-              cachedGroupMetadata: undefined
-            });
-
-            console.log(`[WhatsApp] ✅ Mensaje enviado exitosamente a ${userId}`);
-            console.log(`[WhatsApp] ID del mensaje: ${sendResult?.key?.id}`);
-            console.log(`[WhatsApp] Chat ID: ${from}`);
-            console.log(`[WhatsApp] Status del mensaje:`, sendResult?.status || 'enviado');
-
-            // Enviar estado de "disponible" después del mensaje
-            try {
-              await this.sock.sendPresenceUpdate('available', from);
-            } catch (presenceErr) {
-              // Ignorar errores de presencia
-            }
-
-            await logger.log("bot", response, userId, userName);
-          } catch (sendError) {
-            console.error(`[WhatsApp] ❌ Error enviando mensaje a ${userId}:`, sendError);
-            console.error(`[WhatsApp] Chat ID que falló: ${from}`);
-            console.error(`[WhatsApp] Tipo de error:`, sendError.message);
-            console.error(`[WhatsApp] Stack trace:`, sendError.stack);
-            // Re-lanzar el error para que se maneje en el catch principal
-            throw sendError;
-          }
-        }
-
-        // Analizar estado de la conversación después de la respuesta
-        const conversationHistory = await sessionManager.getMessages(
-          userId,
-          from
-        );
-        const status = await aiService.analyzeConversationStatus(
-          conversationHistory,
-          conversation
-        );
-
-        console.log(
-          `[FollowUp] Estado de conversación para ${userId}: ${status}`
-        );
-
-        // Manejar seguimientos basados en el estado
-        if (
-          status === "ACEPTADO" ||
-          status === "RECHAZADO" ||
-          status === "FRUSTRADO"
-        ) {
-          // Detener seguimiento si existe
-          if (await followUpManager.isFollowUpActive(userId)) {
-            await followUpManager.stopFollowUp(userId, status.toLowerCase());
-          }
-        } else if (status === "ACTIVO") {
-          // Cliente respondió - detener seguimiento si existe
-          if (await followUpManager.isFollowUpActive(userId)) {
-            await followUpManager.stopFollowUp(userId, "volvio_activo");
-          }
-          // NO iniciar seguimiento aquí - se iniciará automáticamente a los 5 minutos por sessionManager
-        }
-        // NO manejamos INACTIVO aquí - el sessionManager lo hace a los 5 minutos
-
-        // Eliminar del queue después de procesar
-        this.messageProcessingQueue.delete(messageKey);
-      } catch (error) {
-        await this.handleError(error, m.messages[0]);
-      }
-    });
   }
 
   async processMessage(userId, userMessage, chatId) {
     const dataCollectionState = userDataManager.getDataCollectionState(userId);
 
-    // Verificar si estamos esperando el email para activar soporte (prioridad alta)
+    // Verificar si estamos esperando el email para activar soporte
     if (dataCollectionState === "email_pending_for_support") {
       return await this.handleEmailCollection(userId, userMessage, chatId);
     }
 
-    // Si es usuario nuevo, dar bienvenida y pedir nombre (pero no bloquear)
+    // Si es usuario nuevo, dar bienvenida y pedir nombre
     if (dataCollectionState === "none") {
       await userDataManager.setUserData(userId, {});
 
       // Agregar el mensaje del usuario primero
       await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
-      // Dar bienvenida y pedir nombre de forma educada
+      // Dar bienvenida y pedir nombre
       const welcomeMessage = `¡Hola! Soy Daniel, asistente virtual de Navetec.\n\n¿Con quién tengo el gusto?\n\n_Por favor, proporciona tu nombre completo`;
       await sessionManager.addMessage(
         userId,
@@ -443,10 +336,10 @@ class WhatsAppBot {
       return confirmationMessage;
     }
 
-    // Obtener historial para análisis y detección de contexto
+    // Obtener historial para análisis
     let conversationHistory = await sessionManager.getMessages(userId, chatId);
 
-    // Detectar si es un nombre (después de que el bot lo haya pedido en la conversación)
+    // Detectar si es un nombre
     const lastBotMessage = conversationHistory
       .filter((m) => m.role === "assistant")
       .slice(-1)[0];
@@ -462,7 +355,6 @@ class WhatsAppBot {
         await userDataManager.setUserData(userId, { name: trimmedMessage });
         await userDataManager.markNameCollected(userId);
 
-        // Agregar mensaje del usuario a la sesión
         await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
         const confirmationMessage = `¡Mucho gusto, ${trimmedMessage}! ¿En qué más puedo ayudarte?`;
@@ -479,7 +371,7 @@ class WhatsAppBot {
     // Agregar mensaje del usuario a la sesión
     await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
-    // Actualizar historial después de agregar el mensaje
+    // Actualizar historial
     conversationHistory = await sessionManager.getMessages(userId, chatId);
 
     // Analizar conversación y obtener asesor asignado
@@ -531,15 +423,13 @@ class WhatsAppBot {
 
     // Verificar si la respuesta contiene el marcador de activar soporte
     if (aiResponse.includes("{{ACTIVAR_SOPORTE}}")) {
-      // Primero verificar si tenemos el email del usuario
+      // Verificar si tenemos el email del usuario
       const userData = await userDataManager.getUserData(userId);
       if (!userData || !userData.email) {
-        // Si no tenemos email, solicitarlo antes de activar soporte
         const cleanResponse = aiResponse
           .replace("{{ACTIVAR_SOPORTE}}", "")
           .trim();
 
-        // Solo agregar la respuesta limpia si tiene contenido
         if (cleanResponse.length > 0) {
           await sessionManager.addMessage(
             userId,
@@ -555,8 +445,7 @@ class WhatsAppBot {
         return emailRequest;
       }
 
-      // Si ya tenemos el email, continuar con la activación del soporte
-      // Remover el marcador de la respuesta
+      // Si ya tenemos el email, activar soporte
       const cleanResponse = aiResponse
         .replace("{{ACTIVAR_SOPORTE}}", "")
         .trim();
@@ -573,7 +462,6 @@ class WhatsAppBot {
           `_Especialidad: ${asesorAsignado.especialidades.join(", ")}_`;
       }
 
-      // Agregar respuesta con información del asesor
       await sessionManager.addMessage(
         userId,
         "assistant",
@@ -581,7 +469,6 @@ class WhatsAppBot {
         chatId
       );
 
-      // Registrar en logs con el asesor asignado
       const logMessage = asesorAsignado
         ? `Modo SOPORTE activado para ${userId} - Asesor: ${asesorAsignado.nombre}`
         : `Modo SOPORTE activado automáticamente para ${userId}`;
@@ -599,8 +486,8 @@ class WhatsAppBot {
   async handleError(error, message) {
     console.error("Error procesando mensaje:", error);
 
-    const from = message.key.remoteJid;
-    const userId = from.replace("@s.whatsapp.net", "");
+    const from = message.from;
+    const userId = from.replace("@c.us", "");
 
     let errorMessage = "Lo siento, ocurrió un error. Inténtalo de nuevo.";
 
@@ -613,7 +500,7 @@ class WhatsAppBot {
     }
 
     try {
-      await this.sock.sendMessage(from, { text: errorMessage });
+      await message.reply(errorMessage);
       logger.log("ERROR", error.message, userId);
     } catch (sendError) {
       console.error("Error enviando mensaje de error:", sendError);
@@ -622,15 +509,15 @@ class WhatsAppBot {
 
   async stop() {
     console.log("Cerrando bot...");
-    if (this.sock) {
-      this.sock.end();
+    if (this.client) {
+      await this.client.destroy();
     }
   }
 
   async clearSession() {
     const fs = require("fs").promises;
     const path = require("path");
-    const authPath = path.join(process.cwd(), "auth_baileys");
+    const authPath = path.join(process.cwd(), ".wwebjs_auth");
 
     try {
       await fs.rm(authPath, { recursive: true, force: true });
@@ -643,20 +530,13 @@ class WhatsAppBot {
   async logout() {
     console.log("Cerrando sesión de WhatsApp...");
     try {
-      this.reconnectAttempts = 0;
-      this.isReconnecting = false;
-
-      if (this.sock) {
-        try {
-          await this.sock.logout();
-        } catch (err) {
-          console.log("Error al hacer logout:", err.message);
-        }
+      if (this.client) {
+        await this.client.logout();
       }
 
       await this.clearSession();
 
-      // Reiniciar el bot para generar nuevo QR
+      // Reiniciar el bot
       setTimeout(() => this.start(), 2000);
       return true;
     } catch (error) {
@@ -669,7 +549,6 @@ class WhatsAppBot {
     // Validar y guardar email
     const email = userMessage.trim().toLowerCase();
     if (!userDataManager.isValidEmail(email)) {
-      // Agregar el mensaje del usuario al historial antes de responder
       await sessionManager.addMessage(userId, "user", userMessage, chatId);
       const errorMessage = `Por favor, ingresa un correo electrónico válido (ejemplo: tucorreo@ejemplo.com):`;
       await sessionManager.addMessage(
@@ -688,7 +567,6 @@ class WhatsAppBot {
 
     // Verificar si había una activación de soporte pendiente
     if (await userDataManager.hasPendingSupportActivation(userId)) {
-      // Limpiar el flag de soporte pendiente
       await userDataManager.setPendingSupportActivation(userId, false);
 
       // Activar modo soporte
@@ -715,7 +593,7 @@ class WhatsAppBot {
         console.error("[Bot] Error analizando conversación:", error);
       }
 
-      // Preparar respuesta con información del asesor
+      // Preparar respuesta
       let response = `¡Perfecto ${userData.name}! ✅\n\nHe registrado tu correo: ${email}\n\nTe estoy transfiriendo con uno de nuestros asesores especializados que te ayudará con tu caso.`;
 
       if (asesorAsignado) {
@@ -724,25 +602,21 @@ class WhatsAppBot {
           `_Especialidad: ${asesorAsignado.especialidades.join(", ")}_`;
       }
 
-      // Registrar en logs
       const logMessage = asesorAsignado
         ? `Modo SOPORTE activado para ${userId} - Asesor: ${asesorAsignado.nombre}`
         : `Modo SOPORTE activado para ${userId}`;
       await logger.log("SYSTEM", logMessage);
 
-      // Agregar respuesta al historial
       await sessionManager.addMessage(userId, "assistant", response, chatId);
 
       return response;
     } else {
-      // Solo confirmación de email sin activar soporte
       return `¡Gracias ${userData.name}! ✅\n\nHe registrado tu correo: ${email}\n\n¿En qué más puedo ayudarte?`;
     }
   }
 
   /**
    * Procesa mensajes que llegaron mientras el bot estaba desconectado
-   * Se ejecuta automáticamente al conectarse el bot
    */
   async processPendingMessages() {
     try {
@@ -764,7 +638,7 @@ class WhatsAppBot {
           `[PendingMessages] 📊 Verificando ${activeSessions.length} sesiones recientes...`
         );
 
-        // Revisar cada sesión para ver si hay mensajes nuevos
+        // Revisar cada sesión
         for (const session of activeSessions) {
           try {
             const chatId = session.chat_id;
@@ -773,23 +647,22 @@ class WhatsAppBot {
 
             checkedChats++;
 
-            // Intentar obtener los últimos 5 mensajes del chat
-            const messages = await this.sock.fetchMessagesFromWA(chatId, 5);
+            // Obtener el chat
+            const chat = await this.client.getChatById(chatId);
 
-            if (!messages || messages.length === 0) continue;
+            // Obtener mensajes no leídos
+            const unreadMessages = await chat.fetchMessages({ limit: 5 });
 
-            // Filtrar mensajes que:
-            // 1. No son nuestros (fromMe = false)
-            // 2. Son más recientes que la última actividad registrada
-            // 3. Tienen contenido de texto
+            if (!unreadMessages || unreadMessages.length === 0) continue;
+
+            // Filtrar mensajes nuevos
             const lastActivity = new Date(session.last_activity).getTime();
-            const newMessages = messages.filter(
+            const newMessages = unreadMessages.filter(
               (msg) =>
-                !msg.key.fromMe &&
-                msg.messageTimestamp * 1000 > lastActivity &&
-                msg.message &&
-                (msg.message.conversation ||
-                  msg.message.extendedTextMessage?.text)
+                !msg.fromMe &&
+                msg.timestamp * 1000 > lastActivity &&
+                msg.body &&
+                msg.body.trim() !== ""
             );
 
             if (newMessages.length > 0) {
@@ -803,7 +676,6 @@ class WhatsAppBot {
                   await this.processUnreadMessage(msg);
                   processedCount++;
 
-                  // Pequeña pausa entre mensajes
                   await new Promise((resolve) => setTimeout(resolve, 1000));
                 } catch (error) {
                   console.error(
@@ -815,7 +687,6 @@ class WhatsAppBot {
               }
             }
           } catch (error) {
-            // Error obteniendo mensajes de un chat específico, continuar con el siguiente
             if (error.message && !error.message.includes('404')) {
               console.log(
                 `[PendingMessages] ⚠️ No se pudieron obtener mensajes de un chat: ${error.message}`
@@ -852,34 +723,25 @@ class WhatsAppBot {
           "[PendingMessages] ⚠️ Error consultando base de datos:",
           dbError.message
         );
-        console.log(
-          "[PendingMessages] ℹ️ El bot procesará mensajes normalmente cuando lleguen nuevos"
-        );
       }
     } catch (error) {
       console.error(
         "[PendingMessages] ❌ Error general procesando mensajes pendientes:",
         error.message
       );
-      console.log(
-        "[PendingMessages] ℹ️ El bot continuará funcionando normalmente para mensajes nuevos"
-      );
     }
   }
 
   /**
    * Procesa un mensaje no leído individual
-   * @param {Object} msg - Mensaje de WhatsApp
    */
   async processUnreadMessage(msg) {
-    const from = msg.key.remoteJid;
-    const userId = from.replace("@s.whatsapp.net", "");
-    const userName = msg.pushName || userId;
+    const from = msg.from;
+    const userId = from.replace("@c.us", "");
+    const contact = await msg.getContact();
+    const userName = contact.pushname || contact.name || userId;
     const chatId = from;
-
-    // Obtener el texto del mensaje
-    const conversation =
-      msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+    const conversation = msg.body;
 
     if (!conversation || conversation.trim() === "") {
       return;
@@ -902,51 +764,30 @@ class WhatsAppBot {
           isSupport ? "SOPORTE" : "HUMANO"
         }, no se responde automáticamente`
       );
-      // Guardar el mensaje en el historial pero no responder
       await sessionManager.addMessage(userId, "user", conversation, chatId);
       await logger.log("USER", conversation, userId, userName);
       return;
     }
 
-    // Agregar mensaje al log
     await logger.log("USER", conversation, userId, userName);
 
-    // Generar respuesta con IA
-    const aiResponse = await this.generateAIResponse(
-      userId,
-      userName,
-      conversation,
-      chatId
-    );
+    // Procesar mensaje
+    const response = await this.processMessage(userId, conversation, chatId);
 
     // Enviar respuesta
     try {
-      // Enviar estado de "escribiendo"
-      try {
-        await this.sock.sendPresenceUpdate('composing', from);
-        await new Promise(resolve => setTimeout(resolve, 300));
-      } catch (presenceErr) {
-        // Ignorar errores de presencia
-      }
+      const chat = await msg.getChat();
+      await chat.sendStateTyping();
+      await new Promise(resolve => setTimeout(resolve, 300));
 
-      const sendResult = await this.sock.sendMessage(from, { text: aiResponse });
+      await msg.reply(response);
       console.log(`[PendingMessages] ✅ Respuesta enviada a ${userName}`);
-      console.log(`[PendingMessages] ID del mensaje: ${sendResult?.key?.id}`);
-      console.log(`[PendingMessages] Status: ${sendResult?.status || 'enviado'}`);
-
-      // Enviar estado de "disponible"
-      try {
-        await this.sock.sendPresenceUpdate('available', from);
-      } catch (presenceErr) {
-        // Ignorar errores de presencia
-      }
     } catch (sendError) {
       console.error(`[PendingMessages] ❌ Error enviando mensaje a ${userId}:`, sendError.message);
       throw sendError;
     }
 
-    // Registrar respuesta en logs
-    await logger.log("BOT", aiResponse, userId);
+    await logger.log("BOT", response, userId);
   }
 }
 
