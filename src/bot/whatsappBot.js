@@ -35,17 +35,28 @@ class WhatsAppBot {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
+          '--disable-gpu',
+          '--disable-dev-profile',
+          '--disable-software-rasterizer',
+          '--disable-extensions',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-ipc-flooding-protection'
         ]
       };
 
-      // Intentar usar Chrome del sistema en macOS
+      // Intentar usar Chrome del sistema (útil en macOS y algunos Linux)
       const fs = require('fs');
       const chromePaths = [
         '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
         '/Applications/Chromium.app/Contents/MacOS/Chromium',
+        '/usr/bin/google-chrome-stable',
         '/usr/bin/google-chrome',
-        '/usr/bin/chromium-browser'
+        '/usr/bin/chromium-browser',
+        '/usr/bin/chromium'
       ];
 
       for (const chromePath of chromePaths) {
@@ -54,6 +65,11 @@ class WhatsAppBot {
           puppeteerConfig.executablePath = chromePath;
           break;
         }
+      }
+
+      // Si no encontró Chrome del sistema, usar el bundled de Puppeteer
+      if (!puppeteerConfig.executablePath) {
+        console.log('Usando Chromium bundled de Puppeteer');
       }
 
       this.client = new Client({

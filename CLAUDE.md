@@ -13,6 +13,9 @@ WhatsApp Bot application with AI-powered responses using DeepSeek API and a Reac
 # Install dependencies
 npm install
 
+# Install system dependencies (Linux only, requires sudo)
+sudo bash install-dependencies.sh
+
 # Start development server with hot reload
 npm run dev
 
@@ -98,7 +101,20 @@ WEB_PORT=3001
 
 - The bot only responds to private messages (ignores groups)
 - Requires QR code scan for initial WhatsApp authentication
-- Web panel accessible at http://localhost:3001
+- Web panel accessible at http://localhost:4242 (configurable via WEB_PORT in .env)
 - Vite config includes ngrok domains for development tunneling
 - No test framework currently configured
 - No linting or formatting tools configured
+
+## Deployment
+
+### Linux Server Requirements
+When deploying to a Linux server, Chromium requires system dependencies. See `DEPLOYMENT.md` for detailed instructions.
+
+Quick install:
+```bash
+sudo bash install-dependencies.sh
+```
+
+### Docker
+A Dockerfile is recommended for production deployment. The bot automatically detects and uses system Chrome if available, otherwise falls back to bundled Chromium.
