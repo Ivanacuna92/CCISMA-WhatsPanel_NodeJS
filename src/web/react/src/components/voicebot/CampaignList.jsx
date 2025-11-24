@@ -1,6 +1,37 @@
-import { Phone, Users, Calendar, TrendingUp, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
+import { Phone, Users, Calendar, TrendingUp, RefreshCw, Trash2 } from 'lucide-react';
+import voicebotApi from '../../services/voicebotApi';
 
 function CampaignList({ campaigns, onSelectCampaign, onRefresh }) {
+    const [deletingId, setDeletingId] = useState(null);
+
+    const handleDelete = async (e, campaignId, campaignName, campaignStatus) => {
+        e.stopPropagation(); // Evitar que se dispare el onClick del card
+
+        // Verificar si está activa
+        if (campaignStatus === 'running') {
+            alert('No se puede eliminar una campaña activa. Primero detén la campaña.');
+            return;
+        }
+
+        // Confirmar eliminación
+        if (!confirm(`¿Estás seguro de eliminar la campaña "${campaignName}"?\n\nEsto eliminará toda la información asociada: contactos, llamadas, transcripciones y citas.`)) {
+            return;
+        }
+
+        setDeletingId(campaignId);
+
+        try {
+            await voicebotApi.deleteCampaign(campaignId);
+            onRefresh(); // Recargar lista
+        } catch (error) {
+            console.error('Error eliminando campaña:', error);
+            alert(error.response?.data?.error || 'Error eliminando campaña');
+        } finally {
+            setDeletingId(null);
+        }
+    };
+
     const getStatusBadge = (status) => {
         const badges = {
             pending: { bg: 'bg-gray-100', text: 'text-gray-700', label: 'Pendiente' },
@@ -77,11 +108,27 @@ function CampaignList({ campaigns, onSelectCampaign, onRefresh }) {
                             </div>
                         </div>
 
-                        {/* Fecha */}
-                        <div className="mt-4 pt-4 border-t border-gray-100">
+                        {/* Fecha y Acciones */}
+                        <div className="mt-4 pt-4 border-t border-gray-100 flex justify-between items-center">
                             <p className="text-xs text-gray-500">
                                 Creada: {new Date(campaign.created_at).toLocaleDateString('es-MX')}
                             </p>
+                            <button
+                                onClick={(e) => handleDelete(e, campaign.id, campaign.campaign_name, campaign.status)}
+                                disabled={deletingId === campaign.id}
+                                className={`p-2 rounded-lg transition-colors ${
+                                    campaign.status === 'running'
+                                        ? 'text-gray-300 cursor-not-allowed'
+                                        : 'text-red-500 hover:bg-red-50'
+                                } ${deletingId === campaign.id ? 'opacity-50 cursor-wait' : ''}`}
+                                title={campaign.status === 'running' ? 'No se puede eliminar una campaña activa' : 'Eliminar campaña'}
+                            >
+                                {deletingId === campaign.id ? (
+                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-500"></div>
+                                ) : (
+                                    <Trash2 className="h-4 w-4" />
+                                )}
+                            </button>
                         </div>
                     </div>
                 ))}

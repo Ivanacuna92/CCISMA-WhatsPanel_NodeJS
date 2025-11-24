@@ -1,11 +1,10 @@
 import { useState, useEffect } from 'react';
-import { Phone, Upload, Play, Pause, Square, Calendar, BarChart3, Settings } from 'lucide-react';
+import { Phone, Upload, Play, Pause, Square, Calendar, BarChart3 } from 'lucide-react';
 import voicebotApi from '../services/voicebotApi';
 import CampaignCreate from './voicebot/CampaignCreate';
 import CampaignList from './voicebot/CampaignList';
 import CampaignDetails from './voicebot/CampaignDetails';
 import AppointmentsList from './voicebot/AppointmentsList';
-import VoicebotConfig from './voicebot/VoicebotConfig';
 
 function VoicebotPanel() {
     const [activeTab, setActiveTab] = useState('campaigns');
@@ -65,8 +64,7 @@ function VoicebotPanel() {
     const tabs = [
         { id: 'campaigns', label: 'Campañas', icon: Phone },
         { id: 'create', label: 'Nueva Campaña', icon: Upload },
-        { id: 'appointments', label: 'Citas', icon: Calendar },
-        { id: 'config', label: 'Configuración', icon: Settings }
+        { id: 'appointments', label: 'Citas', icon: Calendar }
     ];
 
     if (loading) {
@@ -159,10 +157,6 @@ function VoicebotPanel() {
 
                 {activeTab === 'appointments' && (
                     <AppointmentsList />
-                )}
-
-                {activeTab === 'config' && (
-                    <VoicebotConfig />
                 )}
             </div>
         </div>

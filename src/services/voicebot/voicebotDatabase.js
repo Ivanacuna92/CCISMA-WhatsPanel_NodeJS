@@ -19,7 +19,16 @@ class VoicebotDatabase {
     }
 
     async getAllCampaigns(limit = 50) {
-        const sql = `SELECT * FROM voicebot_campaigns ORDER BY created_at DESC LIMIT ?`;
+        const sql = `
+            SELECT
+                c.*,
+                (SELECT COUNT(*) FROM voicebot_contacts WHERE campaign_id = c.id) as total_contacts,
+                (SELECT COUNT(*) FROM voicebot_calls WHERE campaign_id = c.id AND status = 'completed') as calls_completed,
+                (SELECT COUNT(*) FROM voicebot_appointments WHERE campaign_id = c.id) as appointments_scheduled
+            FROM voicebot_campaigns c
+            ORDER BY c.created_at DESC
+            LIMIT ?
+        `;
         return await database.query(sql, [limit]);
     }
 

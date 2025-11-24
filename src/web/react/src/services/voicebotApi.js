@@ -49,6 +49,11 @@ const voicebotApi = {
         return response.data;
     },
 
+    async deleteCampaign(campaignId) {
+        const response = await axios.delete(`${API_BASE_URL}/campaigns/${campaignId}`);
+        return response.data;
+    },
+
     // ========== LLAMADAS ==========
 
     async getCampaignCalls(campaignId) {
@@ -77,6 +82,16 @@ const voicebotApi = {
         const response = await axios.put(`${API_BASE_URL}/appointments/${appointmentId}/status`, {
             status
         });
+        return response.data;
+    },
+
+    async updateAppointment(appointmentId, appointmentData) {
+        const response = await axios.put(`${API_BASE_URL}/appointments/${appointmentId}`, appointmentData);
+        return response.data;
+    },
+
+    async deleteAppointment(appointmentId) {
+        const response = await axios.delete(`${API_BASE_URL}/appointments/${appointmentId}`);
         return response.data;
     },
 

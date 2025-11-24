@@ -70,30 +70,31 @@ class AudioHandler {
     }
 
     /**
-     * Convierte audio a formato compatible con OpenAI con mejoras de calidad
+     * Mejora audio del cliente para mejor transcripción con Whisper
      */
-    async convertAudioForWhisper(inputPath) {
-        try {
-            const outputPath = inputPath.replace('.wav', '_whisper.wav');
+    async enhanceAudioForWhisper(inputPath) {
+        const outputPath = inputPath.replace('.wav', '_enhanced.wav');
 
-            // Mejorar audio para Whisper:
-            // 1. Convertir a 16kHz mono (estándar para voz)
-            // 2. Normalizar volumen
-            // 3. Aplicar filtro de ruido telefónico (highpass 200Hz, lowpass 3400Hz)
-            // 4. Reducir ruido de fondo
+        try {
+            // Procesamiento optimizado para voz telefónica:
+            // 1. 16kHz mono (formato óptimo para Whisper)
+            // 2. Filtro de ruido telefónico (300-3400Hz es el rango telefónico)
+            // 3. Normalización de volumen
+            // 4. Reducción de ruido de fondo
+            // 5. Compresión para nivelar volumen
             await execAsync(
-                `sox "${inputPath}" "${outputPath}" \
-                rate 16000 \
-                channels 1 \
-                highpass 200 \
+                `sox "${inputPath}" -r 16000 -c 1 "${outputPath}" \
+                highpass 300 \
                 lowpass 3400 \
-                norm -3`
+                norm -1 \
+                compand 0.3,1 6:-70,-60,-20 -5 -90 0.2 \
+                silence 1 0.1 0.1% reverse silence 1 0.1 0.1% reverse`
             );
 
             console.log(`✅ Audio mejorado para Whisper: ${outputPath}`);
             return outputPath;
         } catch (error) {
-            console.warn('⚠️  Error mejorando audio, usando original:', error.message);
+            console.warn('⚠️  Usando audio original:', error.message);
             return inputPath;
         }
     }
@@ -127,22 +128,31 @@ class AudioHandler {
     }
 
     /**
-     * Convierte audio (MP3 o WAV) a formato optimizado para Asterisk playback
+     * Convierte audio TTS para Asterisk
      */
     async convertForAsteriskPlayback(inputPath) {
+        const wavPath = inputPath.replace(/\.(wav|mp3)$/, '_ast.wav');
         try {
-            // Convertir a formato GSM (codec telefónico comprimido)
-            const outputPath = inputPath.replace(/\.(wav|mp3)$/, '_asterisk.gsm');
+            await execAsync(`sox "${inputPath}" -r 8000 -c 1 "${wavPath}"`);
+            return wavPath;
+        } catch (error) {
+            console.error('❌ Error convirtiendo:', error.message);
+            throw error;
+        }
+    }
 
-            // Convertir a GSM: 8kHz, mono, GSM codec
-            await execAsync(
-                `sox "${inputPath}" -r 8000 -c 1 "${outputPath}"`
-            );
-
-            console.log(`✅ Audio convertido para Asterisk (GSM): ${outputPath}`);
+    /**
+     * Convierte audio TTS directo al destino (sin archivo intermedio)
+     * Optimizado para menor latencia
+     */
+    async convertForAsteriskPlaybackDirect(inputPath, outputPath) {
+        try {
+            // Conversión optimizada: 8kHz mono para Asterisk
+            // Usamos rate en lugar de -r para mejor calidad
+            await execAsync(`sox "${inputPath}" -r 8000 -c 1 -b 16 "${outputPath}" rate -v 8000`);
             return outputPath;
         } catch (error) {
-            console.warn('⚠️  Error convirtiendo para Asterisk:', error.message);
+            console.error('❌ Error convirtiendo:', error.message);
             throw error;
         }
     }

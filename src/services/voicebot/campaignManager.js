@@ -17,6 +17,11 @@ class CampaignManager extends EventEmitter {
     }
 
     async initialize() {
+        // RESET al iniciar
+        this.activeCallsCount = 0;
+        this.callHandlers.clear();
+        console.log('🔄 Contador de llamadas reseteado');
+
         // Conectar a Asterisk ARI
         console.log('🔌 Conectando a Asterisk ARI...');
         await ariManager.connect();
@@ -28,6 +33,12 @@ class CampaignManager extends EventEmitter {
         // Escuchar llamadas contestadas desde ARI
         ariManager.on('callAnswered', (callData) => {
             this.handleCallAnswered(callData);
+        });
+
+        // Escuchar llamadas fallidas
+        ariManager.on('callFailed', (data) => {
+            console.log(`📴 Llamada fallida detectada: ${data.reason}`);
+            // El timeout de 45s se encargará de limpiar el slot
         });
 
         // Limpiar grabaciones antiguas cada hora
@@ -175,12 +186,20 @@ class CampaignManager extends EventEmitter {
             return;
         }
 
+        // Validar que el contador no sea negativo (bug fix)
+        if (this.activeCallsCount < 0) {
+            console.log(`⚠️ Contador negativo detectado, reseteando a 0`);
+            this.activeCallsCount = 0;
+        }
+
         // Verificar límite de llamadas concurrentes
         if (this.activeCallsCount >= this.maxConcurrentCalls) {
-            console.log(`⏳ Límite de llamadas concurrentes alcanzado (${this.maxConcurrentCalls})`);
+            console.log(`⏳ Esperando slot... (${this.activeCallsCount}/${this.maxConcurrentCalls})`);
             setTimeout(() => this.processCallQueue(campaignId), 5000);
             return;
         }
+
+        console.log(`📞 Procesando cola - Slots disponibles: ${this.maxConcurrentCalls - this.activeCallsCount}`);
 
         // Obtener siguiente contacto pendiente
         const pendingContacts = await voicebotDB.getPendingContacts(campaignId, 1);
@@ -217,18 +236,34 @@ class CampaignManager extends EventEmitter {
             );
 
             console.log(`✅ Llamada originada via ARI: ${contact.phone_number}`);
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
 
             // Guardar handler para esta llamada (usando phoneNumber como key)
             this.callHandlers.set(contact.phone_number, {
                 contact: contact,
-                startTime: new Date()
+                startTime: new Date(),
+                timeout: null
             });
+
+            // TIMEOUT: Si en 45 segundos no contestan, liberar el slot
+            const callTimeout = setTimeout(() => {
+                const handler = this.callHandlers.get(contact.phone_number);
+                if (handler && !handler.answered) {
+                    console.log(`⏰ Timeout: ${contact.phone_number} no contestó en 45s`);
+                    this.handleCallTimeout(contact.phone_number);
+                }
+            }, 45000);
+
+            // Guardar referencia al timeout
+            const handler = this.callHandlers.get(contact.phone_number);
+            if (handler) handler.timeout = callTimeout;
 
             return result;
         } catch (error) {
             console.error(`❌ Error haciendo llamada a ${contact.phone_number}:`, error);
 
             this.activeCallsCount--;
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
             await voicebotDB.updateContactStatus(contact.id, 'failed');
 
             throw error;
@@ -236,6 +271,26 @@ class CampaignManager extends EventEmitter {
     }
 
     // ==================== MANEJO DE LLAMADAS ARI ====================
+
+    // Manejar timeout de llamada no contestada
+    async handleCallTimeout(phoneNumber) {
+        const handler = this.callHandlers.get(phoneNumber);
+        if (!handler) return;
+
+        console.log(`📴 Liberando slot por timeout: ${phoneNumber}`);
+
+        // Marcar contacto como no_answer
+        try {
+            await voicebotDB.updateContactStatus(handler.contact.id, 'no_answer');
+        } catch (err) {
+            console.error('Error actualizando estado:', err);
+        }
+
+        // Limpiar
+        this.callHandlers.delete(phoneNumber);
+        this.activeCallsCount--;
+        console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+    }
 
     async handleCallAnswered(callData) {
         const { channelId, bridgeId, phoneNumber, channel, bridge } = callData;
@@ -250,8 +305,17 @@ class CampaignManager extends EventEmitter {
 
             if (!callHandler) {
                 console.error('⚠️  No se encontró información del contacto para esta llamada');
+                this.activeCallsCount--;
+                console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
                 await ariManager.hangup(channelId);
                 return;
+            }
+
+            // Marcar como contestada y cancelar timeout
+            callHandler.answered = true;
+            if (callHandler.timeout) {
+                clearTimeout(callHandler.timeout);
+                callHandler.timeout = null;
             }
 
             const contact = callHandler.contact;
@@ -281,6 +345,7 @@ class CampaignManager extends EventEmitter {
             await voicebotDB.updateCallStatus(dbCallId, 'completed', new Date());
 
             this.activeCallsCount--;
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
 
             // Limpiar handler
             this.callHandlers.delete(phoneNumber);
@@ -288,6 +353,9 @@ class CampaignManager extends EventEmitter {
         } catch (error) {
             console.error('❌ Error manejando llamada contestada:', error);
             this.activeCallsCount--;
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+            // Limpiar handler en caso de error también
+            this.callHandlers.delete(phoneNumber);
         }
     }
 
@@ -311,10 +379,13 @@ class CampaignManager extends EventEmitter {
         };
 
         try {
-            // ===== SALUDO INICIAL =====
-            const greeting = `Hola ${contact.client_name || 'buenos días'}, soy el asistente virtual de Navetec. Te llamo para presentarte una nave industrial que tenemos disponible en ${contact.nave_location || 'tu zona'}. ¿Tienes un momento para que te cuente?`;
+            // ===== SALUDO INICIAL (solo pregunta si tiene un momento) =====
+            const greeting = `Hola ${contact.client_name || ''}, te llamo de Navetec. Tenemos una nave industrial que podría interesarte. ¿Tienes un momento para que te cuente?`;
 
             await this.speakToClient(bridgeId, greeting, callId, turnCount++, 'bot', conversationId);
+
+            // IMPORTANTE: Agregar el saludo al historial para que GPT sepa que ya se hizo
+            openaiVoice.addToConversationHistory(conversationId, 'assistant', greeting);
 
             // ===== CICLO DE CONVERSACIÓN =====
             while (turnCount < maxTurns) {
@@ -332,52 +403,32 @@ class CampaignManager extends EventEmitter {
 
                 const audioPath = audioHandler.generateAudioPath(callId, turnCount, 'input');
 
-                // SOLUCIÓN: Grabar DESDE EL BRIDGE con dirección mixmon
-                // Esto captura solo el audio entrante del cliente
+                // Grabar respuesta (3s max, corta con 0.3s de silencio)
                 const recordedPath = await ariManager.recordAudioFromBridge(
                     bridgeId,
                     audioPath,
-                    5  // maxDuration reducido a 5s para respuestas rápidas
+                    3
                 );
 
                 if (!recordedPath) {
-                    console.log('⚠️  No se pudo grabar audio del cliente');
+                    console.log('⚠️  No se pudo grabar audio');
                     break;
                 }
 
-                // Verificar si hay voz en el audio
-                const hasVoice = await audioHandler.hasVoiceActivity(recordedPath);
-
-                if (!hasVoice) {
-                    console.log('🔇 Silencio detectado, el cliente no respondió');
-                    // Despedida por silencio
-                    await this.speakToClient(
-                        bridgeId,
-                        'Parece que no puedes hablar en este momento. Te llamaremos en otro momento. Que tengas buen día.',
-                        callId,
-                        turnCount++,
-                        'bot',
-                        conversationId
-                    );
-                    break;
-                }
-
-                // ===== TRANSCRIBIR AUDIO CON WHISPER (DIRECTO, SIN MEJORAR) =====
-                // Saltar mejoras de audio para reducir latencia
-                console.log('🎤 Transcribiendo audio del cliente con Whisper...');
-
+                // ===== TRANSCRIBIR DIRECTO (sin pasos extras) =====
                 const processStartTime = Date.now();
-
                 let transcription;
                 try {
-                    // Transcribir DIRECTO sin procesar para velocidad
+                    // Enviar directo a Whisper - es rápido y detecta silencio solo
+                    const whisperStart = Date.now();
                     transcription = await openaiVoice.transcribeAudio(recordedPath);
+                    console.log(`⚡ Whisper: ${Date.now() - whisperStart}ms`);
                 } catch (error) {
                     console.error('❌ Error transcribiendo:', error);
                     // Pedir que repita
                     await this.speakToClient(
                         bridgeId,
-                        'Perdona, no te escuché bien. ¿Podrías repetir por favor?',
+                        'Perdona, no te escuché bien. ¿Podrías repetir?',
                         callId,
                         turnCount++,
                         'bot',
@@ -390,7 +441,7 @@ class CampaignManager extends EventEmitter {
                     console.log('⚠️  Transcripción vacía');
                     await this.speakToClient(
                         bridgeId,
-                        'No logré entender tu respuesta. ¿Podrías hablar más cerca del teléfono?',
+                        '¿Podrías hablar más cerca del teléfono?',
                         callId,
                         turnCount++,
                         'bot',
@@ -401,18 +452,18 @@ class CampaignManager extends EventEmitter {
 
                 console.log(`📝 Cliente dijo: "${transcription.text}"`);
 
-                // Guardar transcripción del cliente
-                await voicebotDB.addTranscription(callId, {
+                // Guardar transcripción del cliente (async, no esperar)
+                voicebotDB.addTranscription(callId, {
                     sequence: turnCount,
                     speaker: 'client',
                     audioPath: recordedPath,
                     text: transcription.text,
                     confidence: 0.95,
                     processingTime: Date.now() - processStartTime
-                });
+                }).catch(err => console.error('Error guardando transcripción:', err));
 
                 // ===== GENERAR RESPUESTA CON GPT =====
-                console.log('🤖 Generando respuesta con GPT...');
+                const gptStart = Date.now();
 
                 let aiResponse;
                 try {
@@ -422,11 +473,12 @@ class CampaignManager extends EventEmitter {
                         null,
                         context
                     );
+                    console.log(`⚡ GPT: ${Date.now() - gptStart}ms`);
                 } catch (error) {
                     console.error('❌ Error generando respuesta:', error);
                     await this.speakToClient(
                         bridgeId,
-                        'Disculpa, tuve un problema técnico. Permíteme continuar.',
+                        'Disculpa, permíteme continuar.',
                         callId,
                         turnCount++,
                         'bot',
@@ -435,7 +487,8 @@ class CampaignManager extends EventEmitter {
                     continue;
                 }
 
-                console.log(`💬 Bot responderá: "${aiResponse.text}"`);
+                console.log(`💬 Bot: "${aiResponse.text}"`);
+                console.log(`⚡ TOTAL proceso: ${Date.now() - processStartTime}ms`);
 
                 // ===== HABLAR AL CLIENTE (TTS + REPRODUCIR) =====
                 await this.speakToClient(bridgeId, aiResponse.text, callId, turnCount++, 'bot', conversationId, aiResponse.text);
@@ -451,45 +504,21 @@ class CampaignManager extends EventEmitter {
                 }
             }
 
-            // ===== ANÁLISIS POST-CONVERSACIÓN =====
-            console.log('📊 Analizando conversación...');
-
-            const conversationHistory = openaiVoice.getConversationContext(conversationId);
-
-            if (conversationHistory.length > 2) { // Al menos 1 intercambio real
-                try {
-                    const analysis = await openaiVoice.analyzeConversationIntent(conversationHistory);
-
-                    // Si hubo acuerdo o solicitud de cita, crear appointment
-                    if (analysis.wantsAppointment || analysis.agreement) {
-                        await voicebotDB.createAppointment({
-                            callId: callId,
-                            contactId: contact.id,
-                            campaignId: contact.campaign_id,
-                            phoneNumber: contact.phone_number,
-                            clientName: contact.client_name,
-                            date: analysis.appointmentDate,
-                            time: analysis.appointmentTime,
-                            notes: analysis.notes,
-                            interestLevel: analysis.interestLevel,
-                            agreementReached: analysis.agreement
-                        });
-
-                        console.log('📅 Cita agendada para', contact.client_name);
-                    }
-                } catch (error) {
-                    console.error('Error analizando conversación:', error);
-                }
-            }
-
-            // Limpiar contexto
-            openaiVoice.clearConversationContext(conversationId);
+            // ===== ANÁLISIS POST-CONVERSACIÓN (SIEMPRE SE EJECUTA) =====
+            await this.analyzeAndSaveAppointment(conversationId, callId, contact);
 
             console.log(`✅ Conversación finalizada con ${contact.client_name || contact.phone_number}`);
 
         } catch (error) {
             console.error('❌ Error en conversación:', error);
-            openaiVoice.clearConversationContext(conversationId);
+            // IMPORTANTE: Aún con error, intentar analizar la conversación
+            console.log('⚠️ Intentando análisis a pesar del error...');
+            try {
+                await this.analyzeAndSaveAppointment(conversationId, callId, contact);
+            } catch (analysisError) {
+                console.error('❌ Error también en análisis post-error:', analysisError);
+                openaiVoice.clearConversationContext(conversationId);
+            }
             throw error;
         }
     }
@@ -500,40 +529,38 @@ class CampaignManager extends EventEmitter {
         const startTime = Date.now();
 
         try {
-            // ===== GENERAR AUDIO CON TTS =====
-            const audioOutputPath = audioHandler.generateAudioPath(callId, sequence, 'output');
-
-            console.log('🎵 Generando audio con OpenAI TTS...');
-
-            const ttsResult = await openaiVoice.textToSpeech(text, audioOutputPath);
-
-            // Convertir audio para Asterisk (usar el path del MP3)
-            const asteriskAudioPath = await audioHandler.convertForAsteriskPlayback(ttsResult.path);
-
-            // Copiar a directorio de Asterisk sounds (usar data directory, no varlib)
+            // ===== GENERAR AUDIO DIRECTO EN ASTERISK =====
             const asteriskSoundsPath = '/usr/share/asterisk/sounds/custom';
             await fs.mkdir(asteriskSoundsPath, { recursive: true });
 
-            const filename = path.basename(asteriskAudioPath, '.gsm');
-            const destPath = path.join(asteriskSoundsPath, `${filename}.gsm`);
-            await fs.copyFile(asteriskAudioPath, destPath);
+            const filename = `tts_${callId}_${sequence}_${Date.now()}`;
+            const tempMp3Path = `/tmp/${filename}.mp3`;
+            const finalWavPath = `${asteriskSoundsPath}/${filename}.wav`;
 
-            // ===== REPRODUCIR AUDIO AL CLIENTE VIA ARI =====
-            const soundPath = `custom/${filename}`;
-            await ariManager.playAudio(bridgeId, soundPath);
+            // TTS directo a MP3
+            await openaiVoice.textToSpeech(text, tempMp3Path);
+
+            // Convertir directo al destino final (sin archivo intermedio)
+            await audioHandler.convertForAsteriskPlaybackDirect(tempMp3Path, finalWavPath);
+
+            // Reproducir inmediatamente
+            await ariManager.playAudio(bridgeId, `custom/${filename}`);
 
             // ===== GUARDAR TRANSCRIPCIÓN =====
+            const processingTime = Date.now() - startTime;
+            console.log(`⚡ Tiempo de respuesta: ${processingTime}ms`);
+
             await voicebotDB.addTranscription(callId, {
                 sequence: sequence,
                 speaker: speaker,
-                audioPath: audioOutputPath,
+                audioPath: finalWavPath,
                 text: text,
                 response: responseText,
                 confidence: 1.0,
-                processingTime: Date.now() - startTime
+                processingTime: processingTime
             });
 
-            console.log(`✅ Bot habló y se guardó transcripción`);
+            console.log(`✅ Bot habló (${processingTime}ms)`);
 
         } catch (error) {
             console.error('❌ Error hablando al cliente:', error);
@@ -548,6 +575,95 @@ class CampaignManager extends EventEmitter {
         }
     }
 
+    // ==================== ANÁLISIS POST-LLAMADA ====================
+
+    async analyzeAndSaveAppointment(conversationId, callId, contact) {
+        console.log('📊 ===== INICIANDO ANÁLISIS POST-LLAMADA =====');
+        console.log(`   Call ID: ${callId}`);
+        console.log(`   Contacto: ${contact.client_name} (${contact.phone_number})`);
+
+        try {
+            const conversationHistory = openaiVoice.getConversationContext(conversationId);
+            console.log(`   Mensajes en historial: ${conversationHistory.length}`);
+
+            // SIEMPRE analizar, aunque solo haya 1 mensaje (el saludo)
+            if (conversationHistory.length === 0) {
+                console.log('⚠️ No hay historial de conversación para analizar');
+                openaiVoice.clearConversationContext(conversationId);
+                return;
+            }
+
+            // Log del historial completo para debugging
+            console.log('📝 Historial de conversación:');
+            conversationHistory.forEach((msg, i) => {
+                console.log(`   [${i}] ${msg.role}: ${msg.content.substring(0, 100)}...`);
+            });
+
+            // Ejecutar análisis (ahora con regex + GPT)
+            console.log('🔍 Ejecutando análisis de intención...');
+            const analysis = await openaiVoice.analyzeConversationIntent(conversationHistory);
+
+            console.log('📊 Resultado del análisis:');
+            console.log(`   - Interés: ${analysis.interest} (${analysis.interestLevel})`);
+            console.log(`   - Quiere cita: ${analysis.wantsAppointment}`);
+            console.log(`   - Acuerdo alcanzado: ${analysis.agreement}`);
+            console.log(`   - Fecha detectada: ${analysis.appointmentDate} (raw: ${analysis.rawDateMentioned})`);
+            console.log(`   - Hora detectada: ${analysis.appointmentTime} (raw: ${analysis.rawTimeMentioned})`);
+            console.log(`   - Respuesta cliente: ${analysis.clientResponse}`);
+            console.log(`   - Notas: ${analysis.notes}`);
+
+            // Crear cita si se detectó interés o acuerdo
+            const shouldCreateAppointment =
+                analysis.wantsAppointment ||
+                analysis.agreement ||
+                (analysis.interest && analysis.interestLevel === 'high') ||
+                (analysis.appointmentDate && analysis.appointmentTime);
+
+            if (shouldCreateAppointment) {
+                // Construir datetime si tenemos fecha y hora
+                let appointmentDatetime = null;
+                if (analysis.appointmentDate && analysis.appointmentTime) {
+                    appointmentDatetime = `${analysis.appointmentDate} ${analysis.appointmentTime}:00`;
+                }
+
+                const appointmentData = {
+                    callId: callId,
+                    contactId: contact.id,
+                    campaignId: contact.campaign_id,
+                    phoneNumber: contact.phone_number,
+                    clientName: contact.client_name,
+                    date: analysis.appointmentDate,
+                    time: analysis.appointmentTime,
+                    datetime: appointmentDatetime,
+                    notes: `${analysis.notes || ''} | Cliente: ${analysis.clientResponse} | Raw: fecha="${analysis.rawDateMentioned}", hora="${analysis.rawTimeMentioned}"`,
+                    interestLevel: analysis.interestLevel || 'medium',
+                    agreementReached: analysis.agreement || false
+                };
+
+                console.log('📅 CREANDO CITA en base de datos...');
+                const appointmentId = await voicebotDB.createAppointment(appointmentData);
+                console.log(`✅ CITA CREADA - ID: ${appointmentId}`);
+                console.log(`   Para: ${contact.client_name}`);
+                console.log(`   Fecha: ${analysis.appointmentDate || 'Por definir'}`);
+                console.log(`   Hora: ${analysis.appointmentTime || 'Por definir'}`);
+
+                // Actualizar estadísticas de campaña
+                await voicebotDB.updateCampaignStats(contact.campaign_id);
+            } else {
+                console.log('ℹ️ No se detectó cita para agendar');
+                console.log(`   Razón: interest=${analysis.interest}, wantsAppointment=${analysis.wantsAppointment}, agreement=${analysis.agreement}`);
+            }
+
+        } catch (error) {
+            console.error('❌ ERROR en análisis post-llamada:', error);
+            console.error('   Stack:', error.stack);
+        } finally {
+            // SIEMPRE limpiar contexto al final
+            openaiVoice.clearConversationContext(conversationId);
+            console.log('📊 ===== FIN ANÁLISIS POST-LLAMADA =====');
+        }
+    }
+
     // ==================== ESTADÍSTICAS ====================
 
     async getCampaignStats(campaignId) {
@@ -556,6 +672,23 @@ class CampaignManager extends EventEmitter {
 
     getActiveCampaigns() {
         return Array.from(this.activeCampaigns.values());
+    }
+
+    // Resetear contador de llamadas (para cuando queda trabado)
+    resetCallsCounter() {
+        console.log(`🔄 Reseteando contador de llamadas (estaba en ${this.activeCallsCount})`);
+        this.activeCallsCount = 0;
+        this.callHandlers.clear();
+        return { success: true, message: 'Contador reseteado' };
+    }
+
+    getStatus() {
+        return {
+            activeCallsCount: this.activeCallsCount,
+            maxConcurrentCalls: this.maxConcurrentCalls,
+            activeCampaigns: this.activeCampaigns.size,
+            callHandlers: this.callHandlers.size
+        };
     }
 
     async shutdown() {

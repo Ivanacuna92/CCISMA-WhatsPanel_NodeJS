@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, User, Phone, MapPin, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw } from 'lucide-react';
+import { Calendar, User, Phone, MapPin, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, Edit, Trash2 } from 'lucide-react';
 import voicebotApi from '../../services/voicebotApi';
 
 function AppointmentsList() {
@@ -8,6 +8,9 @@ function AppointmentsList() {
     const [filter, setFilter] = useState('all'); // all, high, medium, low
     const [campaigns, setCampaigns] = useState([]);
     const [selectedCampaign, setSelectedCampaign] = useState('all');
+    const [editingId, setEditingId] = useState(null);
+    const [editForm, setEditForm] = useState({});
+    const [deletingId, setDeletingId] = useState(null);
 
     useEffect(() => {
         loadCampaigns();
@@ -80,6 +83,50 @@ function AppointmentsList() {
             hour: '2-digit',
             minute: '2-digit'
         });
+    };
+
+    const handleEdit = (appointment) => {
+        setEditingId(appointment.id);
+        setEditForm({
+            client_name: appointment.client_name,
+            phone_number: appointment.phone_number,
+            appointment_date: appointment.appointment_date?.split('T')[0] || '',
+            appointment_time: appointment.appointment_time || '',
+            nave_location: appointment.nave_location || '',
+            appointment_notes: appointment.analysis_notes || ''
+        });
+    };
+
+    const handleSaveEdit = async () => {
+        try {
+            await voicebotApi.updateAppointment(editingId, editForm);
+            setEditingId(null);
+            setEditForm({});
+            loadAppointments();
+        } catch (error) {
+            console.error('Error actualizando cita:', error);
+            alert('Error actualizando cita');
+        }
+    };
+
+    const handleCancelEdit = () => {
+        setEditingId(null);
+        setEditForm({});
+    };
+
+    const handleDelete = async (appointmentId) => {
+        if (!confirm('¿Estás seguro de eliminar esta cita? Esta acción no se puede deshacer.')) return;
+
+        setDeletingId(appointmentId);
+        try {
+            await voicebotApi.deleteAppointment(appointmentId);
+            loadAppointments();
+        } catch (error) {
+            console.error('Error eliminando cita:', error);
+            alert('Error eliminando cita');
+        } finally {
+            setDeletingId(null);
+        }
     };
 
     const filteredAppointments = appointments.filter(apt => {
@@ -250,96 +297,205 @@ function AppointmentsList() {
                 ) : (
                     filteredAppointments.map((appointment) => (
                         <div key={appointment.id} className="p-6 hover:bg-gray-50 transition-colors">
-                            <div className="flex items-start justify-between">
-                                <div className="flex-1">
-                                    <div className="flex items-center space-x-3 mb-3">
-                                        <h3 className="text-lg font-semibold text-gray-900">
-                                            {appointment.client_name}
-                                        </h3>
-                                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${getInterestColor(appointment.interest_level)}`}>
-                                            {getInterestLabel(appointment.interest_level)}
-                                        </span>
-                                        {appointment.agreement_reached && (
-                                            <span className="px-3 py-1 rounded-full text-xs font-medium text-green-600 bg-green-100 flex items-center space-x-1">
-                                                <CheckCircle className="h-3 w-3" />
-                                                <span>Acuerdo Alcanzado</span>
-                                            </span>
-                                        )}
-                                    </div>
-
-                                    <div className="grid grid-cols-2 gap-4 mb-3">
-                                        <div className="flex items-center text-sm text-gray-600">
-                                            <Phone className="h-4 w-4 mr-2 text-gray-400" />
-                                            <span>{appointment.phone_number}</span>
+                            {editingId === appointment.id ? (
+                                /* Formulario de edición */
+                                <div className="bg-white border-2 border-navetec-primary rounded-lg p-4">
+                                    <h3 className="text-lg font-semibold text-gray-900 mb-4">Editar Cita</h3>
+                                    <div className="grid grid-cols-2 gap-4 mb-4">
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Nombre del Cliente
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editForm.client_name || ''}
+                                                onChange={(e) => setEditForm({...editForm, client_name: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-navetec-primary focus:border-navetec-primary"
+                                            />
                                         </div>
-                                        <div className="flex items-center text-sm text-gray-600">
-                                            <Calendar className="h-4 w-4 mr-2 text-gray-400" />
-                                            <span>{formatDate(appointment.appointment_date)}</span>
-                                            {appointment.appointment_date && (
-                                                <span className="ml-2 text-navetec-primary font-medium">
-                                                    {formatTime(appointment.appointment_date)}
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Teléfono
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editForm.phone_number || ''}
+                                                onChange={(e) => setEditForm({...editForm, phone_number: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-navetec-primary focus:border-navetec-primary"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Fecha de Cita
+                                            </label>
+                                            <input
+                                                type="date"
+                                                value={editForm.appointment_date || ''}
+                                                onChange={(e) => setEditForm({...editForm, appointment_date: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-navetec-primary focus:border-navetec-primary"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Hora de Cita
+                                            </label>
+                                            <input
+                                                type="time"
+                                                value={editForm.appointment_time || ''}
+                                                onChange={(e) => setEditForm({...editForm, appointment_time: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-navetec-primary focus:border-navetec-primary"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Ubicación
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editForm.nave_location || ''}
+                                                onChange={(e) => setEditForm({...editForm, nave_location: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-navetec-primary focus:border-navetec-primary"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                                                Notas
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={editForm.appointment_notes || ''}
+                                                onChange={(e) => setEditForm({...editForm, appointment_notes: e.target.value})}
+                                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-navetec-primary focus:border-navetec-primary"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="flex justify-end space-x-2">
+                                        <button
+                                            onClick={handleCancelEdit}
+                                            className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 border border-gray-300 rounded-md transition-colors"
+                                        >
+                                            Cancelar
+                                        </button>
+                                        <button
+                                            onClick={handleSaveEdit}
+                                            className="px-4 py-2 text-sm text-white bg-navetec-primary hover:bg-navetec-primary-dark rounded-md transition-colors"
+                                        >
+                                            Guardar Cambios
+                                        </button>
+                                    </div>
+                                </div>
+                            ) : (
+                                /* Vista normal de la cita */
+                                <div className="flex items-start justify-between">
+                                    <div className="flex-1">
+                                        <div className="flex items-center space-x-3 mb-3">
+                                            <h3 className="text-lg font-semibold text-gray-900">
+                                                {appointment.client_name}
+                                            </h3>
+                                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${getInterestColor(appointment.interest_level)}`}>
+                                                {getInterestLabel(appointment.interest_level)}
+                                            </span>
+                                            {appointment.agreement_reached && (
+                                                <span className="px-3 py-1 rounded-full text-xs font-medium text-green-600 bg-green-100 flex items-center space-x-1">
+                                                    <CheckCircle className="h-3 w-3" />
+                                                    <span>Acuerdo Alcanzado</span>
                                                 </span>
                                             )}
                                         </div>
-                                        <div className="flex items-center text-sm text-gray-600">
-                                            <MapPin className="h-4 w-4 mr-2 text-gray-400" />
-                                            <span>{appointment.nave_location || 'Sin ubicación'}</span>
+
+                                        <div className="grid grid-cols-2 gap-4 mb-3">
+                                            <div className="flex items-center text-sm text-gray-600">
+                                                <Phone className="h-4 w-4 mr-2 text-gray-400" />
+                                                <span>{appointment.phone_number}</span>
+                                            </div>
+                                            <div className="flex items-center text-sm text-gray-600">
+                                                <Calendar className="h-4 w-4 mr-2 text-gray-400" />
+                                                <span>{formatDate(appointment.appointment_date)}</span>
+                                                {appointment.appointment_time && (
+                                                    <span className="ml-2 text-navetec-primary font-medium">
+                                                        {appointment.appointment_time}
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <div className="flex items-center text-sm text-gray-600">
+                                                <MapPin className="h-4 w-4 mr-2 text-gray-400" />
+                                                <span>{appointment.nave_location || 'Sin ubicación'}</span>
+                                            </div>
+                                            <div className="flex items-center text-sm text-gray-600">
+                                                <Clock className="h-4 w-4 mr-2 text-gray-400" />
+                                                <span>
+                                                    Llamada: {new Date(appointment.call_start).toLocaleDateString('es-MX')} -
+                                                    {' '}{appointment.duration_seconds}s
+                                                </span>
+                                            </div>
                                         </div>
-                                        <div className="flex items-center text-sm text-gray-600">
-                                            <Clock className="h-4 w-4 mr-2 text-gray-400" />
-                                            <span>
-                                                Llamada: {new Date(appointment.call_start).toLocaleDateString('es-MX')} -
-                                                {' '}{appointment.duration_seconds}s
-                                            </span>
+
+                                        {/* Información de la nave */}
+                                        {(appointment.nave_type || appointment.nave_size || appointment.nave_price) && (
+                                            <div className="bg-gray-50 rounded-lg p-3 mb-3">
+                                                <div className="text-xs font-medium text-gray-500 mb-1">Detalles de la Nave:</div>
+                                                <div className="grid grid-cols-3 gap-2 text-sm">
+                                                    {appointment.nave_type && (
+                                                        <div>
+                                                            <span className="text-gray-500">Tipo:</span>{' '}
+                                                            <span className="font-medium">{appointment.nave_type}</span>
+                                                        </div>
+                                                    )}
+                                                    {appointment.nave_size && (
+                                                        <div>
+                                                            <span className="text-gray-500">Tamaño:</span>{' '}
+                                                            <span className="font-medium">{appointment.nave_size} m²</span>
+                                                        </div>
+                                                    )}
+                                                    {appointment.nave_price && (
+                                                        <div>
+                                                            <span className="text-gray-500">Precio:</span>{' '}
+                                                            <span className="font-medium">${appointment.nave_price}</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {/* Notas del análisis */}
+                                        {appointment.analysis_notes && (
+                                            <div className="bg-blue-50 rounded-lg p-3 mb-3">
+                                                <div className="text-xs font-medium text-blue-700 mb-1">
+                                                    Análisis de la conversación:
+                                                </div>
+                                                <p className="text-sm text-blue-900">{appointment.analysis_notes}</p>
+                                            </div>
+                                        )}
+
+                                        {/* Botones de acción */}
+                                        <div className="flex items-center space-x-2 mt-4">
+                                            <button
+                                                onClick={() => handleEdit(appointment)}
+                                                className="flex items-center space-x-1 px-3 py-1.5 text-sm text-blue-600 hover:bg-blue-50 border border-blue-300 rounded-md transition-colors"
+                                            >
+                                                <Edit className="h-4 w-4" />
+                                                <span>Editar</span>
+                                            </button>
+                                            <button
+                                                onClick={() => handleDelete(appointment.id)}
+                                                disabled={deletingId === appointment.id}
+                                                className="flex items-center space-x-1 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 border border-red-300 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                <Trash2 className="h-4 w-4" />
+                                                <span>{deletingId === appointment.id ? 'Eliminando...' : 'Eliminar'}</span>
+                                            </button>
                                         </div>
                                     </div>
 
-                                    {/* Información de la nave */}
-                                    {(appointment.nave_type || appointment.nave_size || appointment.nave_price) && (
-                                        <div className="bg-gray-50 rounded-lg p-3 mb-3">
-                                            <div className="text-xs font-medium text-gray-500 mb-1">Detalles de la Nave:</div>
-                                            <div className="grid grid-cols-3 gap-2 text-sm">
-                                                {appointment.nave_type && (
-                                                    <div>
-                                                        <span className="text-gray-500">Tipo:</span>{' '}
-                                                        <span className="font-medium">{appointment.nave_type}</span>
-                                                    </div>
-                                                )}
-                                                {appointment.nave_size && (
-                                                    <div>
-                                                        <span className="text-gray-500">Tamaño:</span>{' '}
-                                                        <span className="font-medium">{appointment.nave_size} m²</span>
-                                                    </div>
-                                                )}
-                                                {appointment.nave_price && (
-                                                    <div>
-                                                        <span className="text-gray-500">Precio:</span>{' '}
-                                                        <span className="font-medium">${appointment.nave_price}</span>
-                                                    </div>
-                                                )}
-                                            </div>
+                                    {/* Campaña */}
+                                    <div className="ml-6 text-right">
+                                        <div className="text-xs text-gray-500 mb-1">Campaña</div>
+                                        <div className="text-sm font-medium text-gray-700">
+                                            {appointment.campaign_name}
                                         </div>
-                                    )}
-
-                                    {/* Notas del análisis */}
-                                    {appointment.analysis_notes && (
-                                        <div className="bg-blue-50 rounded-lg p-3">
-                                            <div className="text-xs font-medium text-blue-700 mb-1">
-                                                Análisis de la conversación:
-                                            </div>
-                                            <p className="text-sm text-blue-900">{appointment.analysis_notes}</p>
-                                        </div>
-                                    )}
-                                </div>
-
-                                {/* Campaña */}
-                                <div className="ml-6 text-right">
-                                    <div className="text-xs text-gray-500 mb-1">Campaña</div>
-                                    <div className="text-sm font-medium text-gray-700">
-                                        {appointment.campaign_name}
                                     </div>
                                 </div>
-                            </div>
+                            )}
                         </div>
                     ))
                 )}

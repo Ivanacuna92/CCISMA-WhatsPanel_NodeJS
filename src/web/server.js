@@ -945,10 +945,10 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
         // Descargar plantilla CSV de ejemplo
         this.app.get('/api/voicebot/campaigns/template', requireAdmin, (req, res) => {
             try {
-                const csvContent = `Teléfono,Nombre,Tipo de Nave,Ubicación,Tamaño (m2),Precio,Información Adicional,Ventajas Estratégicas
-7771234567,Juan Pérez,Industrial,Torreón Coahuila,500,$25000 MXN/mes,Nave ideal para almacenamiento y distribución,Excelente ubicación cerca de la carretera principal con acceso a servicios
-7779876543,María González,Comercial,Gómez Palacio,300,$18000 MXN/mes,Ideal para centro de distribución,Zona comercial de alto tránsito
-7775551234,Carlos Ramírez,Logística,Lerdo,800,$35000 MXN/mes,Amplio espacio con muelles de carga,Acceso directo a carreteras federales`;
+                const csvContent = `Teléfono,Nombre,Tipo de Nave,Ubicación,Tamaño,Precio,Información Adicional,Ventajas Estratégicas
+7771234567,Juan Pérez,Industrial,Torreón Coahuila,500 metros cuadrados,3 millones 500 mil pesos mexicanos,Nave ideal para almacenamiento y distribución,Excelente ubicación cerca de la carretera principal con acceso a servicios
+7779876543,María González,Comercial,Gómez Palacio,300 metros cuadrados,2 millones de pesos mexicanos,Ideal para centro de distribución,Zona comercial de alto tránsito
+7775551234,Carlos Ramírez,Logística,Lerdo,800 metros cuadrados,5 millones 200 mil pesos mexicanos,Amplio espacio con muelles de carga,Acceso directo a carreteras federales`;
 
                 res.setHeader('Content-Type', 'text/csv; charset=utf-8');
                 res.setHeader('Content-Disposition', 'attachment; filename="plantilla_voicebot_navetec.csv"');
@@ -1062,6 +1062,37 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
             }
         });
 
+        // Eliminar campaña
+        this.app.delete('/api/voicebot/campaigns/:id', requireAdmin, async (req, res) => {
+            try {
+                const campaignId = req.params.id;
+
+                // Verificar que la campaña existe
+                const campaign = await voicebotDB.getCampaign(campaignId);
+                if (!campaign) {
+                    return res.status(404).json({ error: 'Campaña no encontrada' });
+                }
+
+                // Verificar que la campaña no esté activa
+                if (campaign.status === 'running') {
+                    return res.status(400).json({ error: 'No se puede eliminar una campaña activa. Primero detén la campaña.' });
+                }
+
+                // Eliminar registros relacionados en orden (por foreign keys)
+                const database = require('../services/database');
+                await database.query('DELETE FROM voicebot_appointments WHERE campaign_id = ?', [campaignId]);
+                await database.query('DELETE FROM voicebot_transcriptions WHERE call_id IN (SELECT id FROM voicebot_calls WHERE campaign_id = ?)', [campaignId]);
+                await database.query('DELETE FROM voicebot_calls WHERE campaign_id = ?', [campaignId]);
+                await database.query('DELETE FROM voicebot_contacts WHERE campaign_id = ?', [campaignId]);
+                await database.query('DELETE FROM voicebot_campaigns WHERE id = ?', [campaignId]);
+
+                res.json({ success: true, message: 'Campaña eliminada exitosamente' });
+            } catch (error) {
+                console.error('Error eliminando campaña:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
         // Obtener llamadas de una campaña
         this.app.get('/api/voicebot/campaigns/:id/calls', requireAdmin, async (req, res) => {
             try {
@@ -1129,6 +1160,50 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
             }
         });
 
+        // Actualizar cita completa (editar)
+        this.app.put('/api/voicebot/appointments/:id', requireAdmin, async (req, res) => {
+            try {
+                const appointmentId = req.params.id;
+                const { appointment_date, appointment_time, appointment_notes, client_name, phone_number } = req.body;
+
+                const database = require('../services/database');
+
+                const updateData = {};
+                if (appointment_date) updateData.appointment_date = appointment_date;
+                if (appointment_time) updateData.appointment_time = appointment_time;
+                if (appointment_notes) updateData.appointment_notes = appointment_notes;
+                if (client_name) updateData.client_name = client_name;
+                if (phone_number) updateData.phone_number = phone_number;
+
+                // Actualizar appointment_datetime si se proporcionan fecha y hora
+                if (appointment_date && appointment_time) {
+                    updateData.appointment_datetime = `${appointment_date} ${appointment_time}`;
+                }
+
+                await database.update('voicebot_appointments', updateData, 'id = ?', [appointmentId]);
+
+                res.json({ success: true, message: 'Cita actualizada exitosamente' });
+            } catch (error) {
+                console.error('Error actualizando cita:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Eliminar cita
+        this.app.delete('/api/voicebot/appointments/:id', requireAdmin, async (req, res) => {
+            try {
+                const appointmentId = req.params.id;
+                const database = require('../services/database');
+
+                await database.query('DELETE FROM voicebot_appointments WHERE id = ?', [appointmentId]);
+
+                res.json({ success: true, message: 'Cita eliminada exitosamente' });
+            } catch (error) {
+                console.error('Error eliminando cita:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
         // Obtener configuración del voicebot
         this.app.get('/api/voicebot/config', requireAdmin, async (req, res) => {
             try {
@@ -1175,6 +1250,17 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
             } catch (error) {
                 console.error('Error obteniendo estado:', error);
                 res.status(500).json({ error: 'Error obteniendo estado' });
+            }
+        });
+
+        // Resetear contador de llamadas
+        this.app.post('/api/voicebot/reset-calls', requireAdmin, async (req, res) => {
+            try {
+                const result = campaignManager.resetCallsCounter();
+                res.json(result);
+            } catch (error) {
+                console.error('Error reseteando:', error);
+                res.status(500).json({ error: 'Error reseteando contador' });
             }
         });
 

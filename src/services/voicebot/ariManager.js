@@ -37,6 +37,23 @@ class ARIManager extends EventEmitter {
 
             this.client.on('ChannelDestroyed', (event, channel) => {
                 console.log(`📴 Canal destruido: ${channel.id}`);
+                // Emitir evento para que campaignManager maneje la limpieza
+                this.emit('callFailed', {
+                    channelId: channel.id,
+                    reason: 'destroyed'
+                });
+            });
+
+            // Manejar estados de canal (para detectar llamadas no contestadas)
+            this.client.on('ChannelStateChange', (event, channel) => {
+                console.log(`📞 Estado canal ${channel.id}: ${channel.state}`);
+                // Si el canal pasa a "busy" o similar, la llamada falló
+                if (['busy', 'congestion', 'noanswer'].includes(channel.state)) {
+                    this.emit('callFailed', {
+                        channelId: channel.id,
+                        reason: channel.state
+                    });
+                }
             });
 
         } catch (error) {
@@ -150,42 +167,36 @@ class ARIManager extends EventEmitter {
 
     async playAudio(bridgeId, audioPath, channelId = null) {
         try {
-            console.log(`🔊 Reproduciendo audio: ${audioPath}`);
+            // Quitar extensión del path
+            const soundPath = audioPath.replace(/\.(wav|ulaw|alaw|gsm|sln16|sln|mp3)$/i, '');
+            console.log(`🔊 Reproduciendo: ${soundPath}`);
 
-            // ARI espera el path sin la extensión .wav
-            const soundPath = audioPath.replace('.wav', '');
+            // Obtener canal de la llamada activa
+            const callData = Array.from(this.activeCalls.values()).find(c => c.bridge?.id === bridgeId);
+            const targetChannelId = channelId || callData?.channel?.id;
 
             let playback;
 
-            // Si tenemos channelId, reproducir en el canal directamente
-            if (channelId) {
-                console.log(`   En canal: ${channelId}`);
+            if (targetChannelId) {
                 const channel = this.client.Channel();
-                channel.id = channelId;
-                playback = await channel.play({
-                    media: `sound:${soundPath}`
-                });
+                channel.id = targetChannelId;
+                playback = await channel.play({ media: `sound:${soundPath}` });
             } else {
-                // Si no, reproducir en el puente
-                console.log(`   En puente: ${bridgeId}`);
                 const bridge = this.client.Bridge();
                 bridge.id = bridgeId;
-                playback = await bridge.play({
-                    media: `sound:${soundPath}`
-                });
+                playback = await bridge.play({ media: `sound:${soundPath}` });
             }
 
-            // Esperar a que termine la reproducción
-            await new Promise((resolve, reject) => {
+            // Esperar que termine
+            await new Promise((resolve) => {
                 playback.once('PlaybackFinished', resolve);
-                playback.once('PlaybackFailed', reject);
+                playback.once('PlaybackFailed', resolve);
+                setTimeout(resolve, 30000); // timeout 30s
             });
 
-            console.log(`✅ Audio reproducido correctamente`);
             return true;
-
         } catch (error) {
-            console.error('❌ Error reproduciendo audio:', error);
+            console.error('❌ Error reproduciendo:', error.message);
             return false;
         }
     }
@@ -204,7 +215,7 @@ class ARIManager extends EventEmitter {
                 name: cleanName,
                 format: 'wav',
                 maxDurationSeconds: maxDuration,
-                maxSilenceSeconds: 0.8, // Reducido a 0.8s - termina más rápido cuando detecta silencio
+                maxSilenceSeconds: 0.5, // 500ms de silencio - balance entre rapidez y no cortar
                 ifExists: 'overwrite',
                 beep: false,
                 terminateOn: 'none'
@@ -226,9 +237,9 @@ class ARIManager extends EventEmitter {
                 }),
                 new Promise((resolve) => {
                     setTimeout(() => {
-                        console.log(`⏰ Timeout de grabación (${maxDuration + 5}s)`);
+                        console.log(`⏰ Timeout grabación`);
                         resolve({ success: false, timeout: true });
-                    }, (maxDuration + 5) * 1000);
+                    }, (maxDuration + 1) * 1000);
                 })
             ]);
 
