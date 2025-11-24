@@ -936,6 +936,248 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
             }
         });
 
+        // ===== ENDPOINTS DE VOICEBOT (SOLO ADMIN) =====
+
+        const voicebotDB = require('../services/voicebot/voicebotDatabase');
+        const campaignManager = require('../services/voicebot/campaignManager');
+
+        // Crear campaña desde CSV
+        // Descargar plantilla CSV de ejemplo
+        this.app.get('/api/voicebot/campaigns/template', requireAdmin, (req, res) => {
+            try {
+                const csvContent = `Teléfono,Nombre,Tipo de Nave,Ubicación,Tamaño (m2),Precio,Información Adicional,Ventajas Estratégicas
+7771234567,Juan Pérez,Industrial,Torreón Coahuila,500,$25000 MXN/mes,Nave ideal para almacenamiento y distribución,Excelente ubicación cerca de la carretera principal con acceso a servicios
+7779876543,María González,Comercial,Gómez Palacio,300,$18000 MXN/mes,Ideal para centro de distribución,Zona comercial de alto tránsito
+7775551234,Carlos Ramírez,Logística,Lerdo,800,$35000 MXN/mes,Amplio espacio con muelles de carga,Acceso directo a carreteras federales`;
+
+                res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+                res.setHeader('Content-Disposition', 'attachment; filename="plantilla_voicebot_navetec.csv"');
+                res.send('\uFEFF' + csvContent); // BOM para UTF-8
+            } catch (error) {
+                console.error('Error generando plantilla CSV:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        this.app.post('/api/voicebot/campaigns/create', requireAdmin, upload.single('csv'), async (req, res) => {
+            try {
+                if (!req.file) {
+                    return res.status(400).json({ error: 'No se proporcionó archivo CSV' });
+                }
+
+                const { campaignName } = req.body;
+
+                if (!campaignName) {
+                    return res.status(400).json({ error: 'El nombre de la campaña es requerido' });
+                }
+
+                // Guardar CSV temporalmente
+                const tempPath = path.join(__dirname, '../../temp', `campaign_${Date.now()}.csv`);
+                await require('fs').promises.mkdir(path.join(__dirname, '../../temp'), { recursive: true });
+                await require('fs').promises.writeFile(tempPath, req.file.buffer);
+
+                // Crear campaña
+                const result = await campaignManager.createCampaignFromCSV(
+                    tempPath,
+                    campaignName,
+                    req.user.id
+                );
+
+                // Eliminar archivo temporal
+                await require('fs').promises.unlink(tempPath);
+
+                res.json(result);
+            } catch (error) {
+                console.error('Error creando campaña:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Listar campañas
+        this.app.get('/api/voicebot/campaigns', requireAdmin, async (req, res) => {
+            try {
+                const campaigns = await voicebotDB.getAllCampaigns();
+                res.json({ campaigns });
+            } catch (error) {
+                console.error('Error obteniendo campañas:', error);
+                res.status(500).json({ error: 'Error obteniendo campañas' });
+            }
+        });
+
+        // Obtener campaña específica
+        this.app.get('/api/voicebot/campaigns/:id', requireAdmin, async (req, res) => {
+            try {
+                const campaign = await voicebotDB.getCampaign(req.params.id);
+                if (!campaign) {
+                    return res.status(404).json({ error: 'Campaña no encontrada' });
+                }
+                res.json({ campaign });
+            } catch (error) {
+                console.error('Error obteniendo campaña:', error);
+                res.status(500).json({ error: 'Error obteniendo campaña' });
+            }
+        });
+
+        // Obtener estadísticas de campaña
+        this.app.get('/api/voicebot/campaigns/:id/stats', requireAdmin, async (req, res) => {
+            try {
+                const stats = await campaignManager.getCampaignStats(req.params.id);
+                res.json({ stats });
+            } catch (error) {
+                console.error('Error obteniendo estadísticas:', error);
+                res.status(500).json({ error: 'Error obteniendo estadísticas' });
+            }
+        });
+
+        // Iniciar campaña
+        this.app.post('/api/voicebot/campaigns/:id/start', requireAdmin, async (req, res) => {
+            try {
+                const result = await campaignManager.startCampaign(req.params.id);
+                res.json(result);
+            } catch (error) {
+                console.error('Error iniciando campaña:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Pausar campaña
+        this.app.post('/api/voicebot/campaigns/:id/pause', requireAdmin, async (req, res) => {
+            try {
+                await campaignManager.pauseCampaign(req.params.id);
+                res.json({ success: true, message: 'Campaña pausada' });
+            } catch (error) {
+                console.error('Error pausando campaña:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Detener campaña
+        this.app.post('/api/voicebot/campaigns/:id/stop', requireAdmin, async (req, res) => {
+            try {
+                await campaignManager.stopCampaign(req.params.id);
+                res.json({ success: true, message: 'Campaña detenida' });
+            } catch (error) {
+                console.error('Error deteniendo campaña:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Obtener llamadas de una campaña
+        this.app.get('/api/voicebot/campaigns/:id/calls', requireAdmin, async (req, res) => {
+            try {
+                const sql = `
+                    SELECT c.*, co.client_name, co.phone_number
+                    FROM voicebot_calls c
+                    LEFT JOIN voicebot_contacts co ON c.contact_id = co.id
+                    WHERE c.campaign_id = ?
+                    ORDER BY c.call_start DESC
+                `;
+                const calls = await require('../services/database').query(sql, [req.params.id]);
+                res.json({ calls });
+            } catch (error) {
+                console.error('Error obteniendo llamadas:', error);
+                res.status(500).json({ error: 'Error obteniendo llamadas' });
+            }
+        });
+
+        // Obtener transcripción de una llamada
+        this.app.get('/api/voicebot/calls/:id/transcription', requireAdmin, async (req, res) => {
+            try {
+                const transcription = await voicebotDB.getFullConversation(req.params.id);
+                res.json({ transcription });
+            } catch (error) {
+                console.error('Error obteniendo transcripción:', error);
+                res.status(500).json({ error: 'Error obteniendo transcripción' });
+            }
+        });
+
+        // Obtener TODAS las citas agendadas (todas las campañas)
+        this.app.get('/api/voicebot/appointments', requireAdmin, async (req, res) => {
+            try {
+                const appointments = await voicebotDB.getAllAppointments();
+                res.json({ appointments });
+            } catch (error) {
+                console.error('Error obteniendo todas las citas:', error);
+                res.status(500).json({ error: 'Error obteniendo citas' });
+            }
+        });
+
+        // Obtener citas agendadas de una campaña específica
+        this.app.get('/api/voicebot/campaigns/:id/appointments', requireAdmin, async (req, res) => {
+            try {
+                const appointments = await voicebotDB.getAppointmentsByCampaign(req.params.id);
+                res.json({ appointments });
+            } catch (error) {
+                console.error('Error obteniendo citas:', error);
+                res.status(500).json({ error: 'Error obteniendo citas' });
+            }
+        });
+
+        // Actualizar estado de cita
+        this.app.put('/api/voicebot/appointments/:id/status', requireAdmin, async (req, res) => {
+            try {
+                const { status } = req.body;
+                if (!['scheduled', 'confirmed', 'cancelled', 'completed', 'no_show'].includes(status)) {
+                    return res.status(400).json({ error: 'Estado inválido' });
+                }
+
+                await voicebotDB.updateAppointmentStatus(req.params.id, status);
+                res.json({ success: true, message: 'Estado actualizado' });
+            } catch (error) {
+                console.error('Error actualizando cita:', error);
+                res.status(500).json({ error: 'Error actualizando cita' });
+            }
+        });
+
+        // Obtener configuración del voicebot
+        this.app.get('/api/voicebot/config', requireAdmin, async (req, res) => {
+            try {
+                const config = await voicebotDB.getAllConfig();
+                const configObj = {};
+                for (const item of config) {
+                    configObj[item.config_key] = item.config_value;
+                }
+                res.json({ config: configObj });
+            } catch (error) {
+                console.error('Error obteniendo configuración:', error);
+                res.status(500).json({ error: 'Error obteniendo configuración' });
+            }
+        });
+
+        // Actualizar configuración del voicebot
+        this.app.put('/api/voicebot/config', requireAdmin, async (req, res) => {
+            try {
+                const { key, value } = req.body;
+                if (!key || value === undefined) {
+                    return res.status(400).json({ error: 'Key y value son requeridos' });
+                }
+
+                await voicebotDB.setConfig(key, value, req.user.id);
+                res.json({ success: true, message: 'Configuración actualizada' });
+            } catch (error) {
+                console.error('Error actualizando configuración:', error);
+                res.status(500).json({ error: 'Error actualizando configuración' });
+            }
+        });
+
+        // Estado del sistema voicebot
+        this.app.get('/api/voicebot/status', requireAdmin, async (req, res) => {
+            try {
+                const ariManager = require('../services/voicebot/ariManager');
+
+                res.json({
+                    status: 'operational',
+                    asteriskConnected: ariManager.isConnected(),
+                    activeCampaigns: campaignManager.getActiveCampaigns(),
+                    activeCallsCount: campaignManager.activeCallsCount || 0,
+                    maxConcurrentCalls: campaignManager.maxConcurrentCalls || 2
+                });
+            } catch (error) {
+                console.error('Error obteniendo estado:', error);
+                res.status(500).json({ error: 'Error obteniendo estado' });
+            }
+        });
+
         // Servir React app para todas las rutas no-API (solo en producción)
         if (process.env.NODE_ENV === 'production') {
             this.app.get('*', (req, res) => {

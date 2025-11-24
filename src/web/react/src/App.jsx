@@ -4,6 +4,7 @@ import ChatPanel from './components/ChatPanel';
 import Dashboard from './components/Dashboard';
 import Reports from './components/Reports';
 import NavesUpload from './components/NavesUpload';
+import VoicebotPanel from './components/VoicebotPanel';
 import Header from './components/Header';
 import Login from './components/Login';
 import { checkAuth, logout } from './services/api';
@@ -134,19 +135,21 @@ function App() {
         <Reports />
       ) : currentView === 'naves' ? (
         <NavesUpload />
+      ) : currentView === 'voicebot' && user?.role === 'admin' ? (
+        <VoicebotPanel />
       ) : (
         <div className="flex flex-1 overflow-hidden">
-          <ContactsList 
+          <ContactsList
             contacts={contacts}
             setContacts={setContacts}
             selectedContact={selectedContact}
             onSelectContact={setSelectedContact}
           />
-          <ChatPanel 
+          <ChatPanel
             contact={selectedContact}
             onUpdateContact={(updatedContact) => {
               setSelectedContact(updatedContact);
-              setContacts(prev => prev.map(c => 
+              setContacts(prev => prev.map(c =>
                 c.phone === updatedContact.phone ? updatedContact : c
               ));
             }}
