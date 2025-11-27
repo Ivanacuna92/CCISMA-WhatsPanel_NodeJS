@@ -144,12 +144,22 @@ class AudioHandler {
     /**
      * Convierte audio TTS directo al destino (sin archivo intermedio)
      * Optimizado para menor latencia
+     * Soporta PCM raw (24kHz 16-bit mono) y MP3
      */
     async convertForAsteriskPlaybackDirect(inputPath, outputPath) {
         try {
-            // Conversión optimizada: 8kHz mono para Asterisk
-            // Usamos rate en lugar de -r para mejor calidad
-            await execAsync(`sox "${inputPath}" -r 8000 -c 1 -b 16 "${outputPath}" rate -v 8000`);
+            // Detectar si es PCM raw (de OpenAI TTS con response_format: 'pcm')
+            const isPCM = inputPath.endsWith('.pcm');
+
+            if (isPCM) {
+                // PCM de OpenAI: 24kHz, 16-bit signed little-endian, mono
+                // Convertir directo a WAV 8kHz para Asterisk (mejor calidad que MP3→WAV)
+                await execAsync(`sox -t raw -r 24000 -b 16 -c 1 -e signed-integer -L "${inputPath}" -r 8000 "${outputPath}"`);
+                console.log(`✅ PCM→WAV convertido: ${outputPath}`);
+            } else {
+                // MP3 u otro formato: conversión estándar
+                await execAsync(`sox "${inputPath}" -r 8000 -c 1 -b 16 "${outputPath}" rate -v 8000`);
+            }
             return outputPath;
         } catch (error) {
             console.error('❌ Error convirtiendo:', error.message);

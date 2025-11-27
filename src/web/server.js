@@ -465,7 +465,8 @@ class WebServer {
         // API endpoint para estadísticas
         this.app.get('/api/stats/:date?', async (req, res) => {
             try {
-                const date = req.params.date || null;
+                // Si no hay fecha, usar la fecha de hoy
+                const date = req.params.date || new Date().toISOString().split('T')[0];
                 const logs = await logger.getLogs(date);
                 
                 const stats = this.calculateStats(logs);
@@ -945,10 +946,10 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
         // Descargar plantilla CSV de ejemplo
         this.app.get('/api/voicebot/campaigns/template', requireAdmin, (req, res) => {
             try {
-                const csvContent = `Teléfono,Nombre,Tipo de Nave,Ubicación,Tamaño,Precio,Información Adicional,Ventajas Estratégicas
-7771234567,Juan Pérez,Industrial,Torreón Coahuila,500 metros cuadrados,3 millones 500 mil pesos mexicanos,Nave ideal para almacenamiento y distribución,Excelente ubicación cerca de la carretera principal con acceso a servicios
-7779876543,María González,Comercial,Gómez Palacio,300 metros cuadrados,2 millones de pesos mexicanos,Ideal para centro de distribución,Zona comercial de alto tránsito
-7775551234,Carlos Ramírez,Logística,Lerdo,800 metros cuadrados,5 millones 200 mil pesos mexicanos,Amplio espacio con muelles de carga,Acceso directo a carreteras federales`;
+                const csvContent = `Teléfono,Nombre,Tipo de Nave,Ubicación,Tamaño (m2),Precio (MXN),Información Adicional,Ventajas Estratégicas
+7771234567,Juan Pérez,Industrial,Torreón Coahuila,500,3500000,Nave ideal para almacenamiento,Cerca de la carretera principal
+7779876543,María González,Comercial,Gómez Palacio,300,2000000,Ideal para distribución,Zona comercial de alto tránsito
+7775551234,Carlos Ramírez,Logística,Lerdo,800,5200000,Amplio espacio con muelles,Acceso a carreteras federales`;
 
                 res.setHeader('Content-Type', 'text/csv; charset=utf-8');
                 res.setHeader('Content-Disposition', 'attachment; filename="plantilla_voicebot_navetec.csv"');

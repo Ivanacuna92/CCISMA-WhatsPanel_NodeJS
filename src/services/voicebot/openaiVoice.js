@@ -40,14 +40,53 @@ class OpenAIVoiceService {
                         ...formData.getHeaders(),
                         'Authorization': `Bearer ${this.apiKey}`
                     },
-                    timeout: 10000 // 10 segundos máximo para Whisper
+                    timeout: 6000 // 6 segundos máximo para Whisper (audios cortos)
                 }
             );
 
-            console.log('✅ Transcripción Whisper:', response.data.text);
+            let transcribedText = response.data.text || '';
+
+            // Filtrar alucinaciones conocidas de Whisper (frases que inventa cuando hay silencio)
+            const hallucinations = [
+                'eso es todo por hoy',
+                'nos vemos la próxima semana',
+                'nos vemos la proxima semana',
+                'un nuevo episodio',
+                'gracias por ver',
+                'gracias por escuchar',
+                'suscríbete',
+                'suscribete',
+                'dale like',
+                'comparte este video',
+                'hasta la próxima',
+                'hasta la proxima',
+                'bendiciones',
+                'que dios te bendiga',
+                'subtítulos por',
+                'subtitulos por',
+                'amara.org',
+                'www.',
+                'http',
+                '♪',
+                '🎵',
+                '[música]',
+                '[musica]',
+                '[applause]',
+                '[risas]'
+            ];
+
+            const lowerText = transcribedText.toLowerCase();
+            const isHallucination = hallucinations.some(h => lowerText.includes(h));
+
+            if (isHallucination) {
+                console.log(`⚠️ Alucinación de Whisper detectada: "${transcribedText}"`);
+                transcribedText = ''; // Tratar como silencio
+            }
+
+            console.log('✅ Transcripción Whisper:', transcribedText || '(vacío)');
 
             return {
-                text: response.data.text,
+                text: transcribedText,
                 language: response.data.language,
                 duration: response.data.duration
             };
@@ -83,16 +122,17 @@ class OpenAIVoiceService {
                 {
                     model: this.gptModelFast, // Modelo rápido para conversación
                     messages: messages,
-                    temperature: 0.7,
-                    max_tokens: 80, // Respuestas MUY cortas para menor latencia
-                    presence_penalty: 0.3 // Evita repetición = respuestas más directas
+                    temperature: 0.6, // Más determinístico = más rápido
+                    max_tokens: 120, // ~80-90 palabras - balance entre completitud y latencia
+                    presence_penalty: 0.5, // Evita repetición = respuestas más directas
+                    frequency_penalty: 0.3 // Menos palabras repetidas
                 },
                 {
                     headers: {
                         'Authorization': `Bearer ${this.apiKey}`,
                         'Content-Type': 'application/json'
                     },
-                    timeout: 8000 // 8 segundos máximo para GPT
+                    timeout: 5000 // 5 segundos máximo para GPT (más agresivo)
                 }
             );
 
@@ -161,38 +201,25 @@ class OpenAIVoiceService {
             console.log('No se pudo cargar prompt de BD, usando default');
         }
 
-        // Prompt por defecto
-        return `Eres un vendedor telefónico de Navetec. Vendes naves industriales (NO rentas, solo VENTA).
+        // Prompt por defecto - OPTIMIZADO PARA BAJA LATENCIA
+        return `Vendedor telefónico de Navetec. Ventas de naves industriales.
 
-EL SALUDO YA SE HIZO. El cliente ya escuchó: "¿Tienes un momento para que te cuente?"
+REGLA #1: Respuestas MÁXIMO 20 palabras. Sé breve.
 
-AHORA TU PRIMERA RESPUESTA cuando el cliente diga "sí", "claro", "dime", "ok", "por favor", etc:
-OBLIGATORIO decir TODA esta información de la nave:
-1. Tipo de nave
-2. Ubicación
-3. Tamaño en metros cuadrados
-4. Precio en pesos mexicanos
-5. Ventajas (si hay)
-Y terminar con: "¿Te gustaría agendar una visita para conocerla?"
+FLUJO OBLIGATORIO PARA AGENDAR CITA:
+1. Cliente interesado → Pregunta: "¿Qué día te queda bien para visitarla?"
+2. Cliente da día → SIEMPRE pregunta: "Perfecto, ¿a qué hora te acomoda?"
+3. Cliente da hora → Confirma: "Listo, te agendo el [día] a las [hora]. Te esperamos."
 
-EJEMPLO DE TU PRIMERA RESPUESTA:
-"Tenemos una bodega industrial en Querétaro, de 500 metros cuadrados, con precio de venta de 2 millones de pesos mexicanos. Está cerca de la autopista. ¿Te gustaría agendar una visita para conocerla?"
+IMPORTANTE: NUNCA confirmes una cita sin tener TANTO el día COMO la hora. Si solo tienes el día, DEBES preguntar la hora.
 
-DESPUÉS de dar la info, si dice que SÍ quiere visita:
-→ Pregunta: "¿Qué día y hora te quedaría bien?"
+Si dice NO → "Gracias por tu tiempo, que tengas buen día."
+Si pregunta precio/info → Da el dato breve y pregunta si quiere agendar visita.
 
-Cuando te dé día y hora:
-→ Confirma: "Perfecto, te agendo para el [día] a las [hora]."
-
-REGLAS:
-- NUNCA preguntes por día/hora ANTES de dar la información de la nave
-- Di "metros cuadrados" completo
-- Di "pesos mexicanos" completo
-- Si dice NO: "Entendido, gracias por tu tiempo."
-- SÉ BREVE. Máximo 2 oraciones por respuesta después de dar la info inicial.
-- NO repitas información que ya dijiste.
-
-IMPORTANTE: Tu PRIMERA respuesta SIEMPRE debe incluir TODA la información de la nave.`;
+PROHIBIDO:
+- Confirmar cita sin hora
+- Repetir información
+- Frases largas`;
     }
 
     // ==================== TTS (Text-to-Speech) ====================
@@ -243,10 +270,10 @@ IMPORTANTE: Tu PRIMERA respuesta SIEMPRE debe incluir TODA la información de la
             const response = await axios.post(
                 `${this.baseURL}/audio/speech`,
                 {
-                    model: ttsModel, // tts-1-hd para mejor calidad
+                    model: 'tts-1', // tts-1 es más rápido que tts-1-hd
                     input: normalizedText,
                     voice: voice || this.ttsVoice,
-                    response_format: 'mp3', // MP3 alta calidad
+                    response_format: 'pcm', // PCM 24kHz 16-bit mono - sin compresión = mejor calidad
                     speed: ttsSpeed
                 },
                 {
@@ -255,20 +282,21 @@ IMPORTANTE: Tu PRIMERA respuesta SIEMPRE debe incluir TODA la información de la
                         'Content-Type': 'application/json'
                     },
                     responseType: 'arraybuffer',
-                    timeout: 10000 // 10 segundos máximo para TTS
+                    timeout: 6000 // 6 segundos máximo para TTS (textos cortos)
                 }
             );
 
-            // Guardar audio MP3
-            const mp3Path = outputPath.endsWith('.mp3') ? outputPath : outputPath.replace('.wav', '.mp3');
-            await fs.writeFile(mp3Path, response.data);
+            // Guardar audio PCM (raw 24kHz 16-bit mono)
+            const pcmPath = outputPath.replace(/\.(mp3|wav)$/, '.pcm');
+            await fs.writeFile(pcmPath, response.data);
 
-            console.log(`✅ TTS generado: ${mp3Path}`);
+            console.log(`✅ TTS generado (PCM): ${pcmPath}`);
 
             return {
                 success: true,
-                path: mp3Path,
-                size: response.data.length
+                path: pcmPath,
+                size: response.data.length,
+                format: 'pcm' // Indicar que es PCM para la conversión
             };
         } catch (error) {
             console.error('❌ Error en TTS:', error.response?.data || error.message);

@@ -153,12 +153,12 @@ function CampaignCreate({ onCampaignCreated }) {
                                 <div className="flex-1">
                                     <h4 className="font-semibold text-sm text-blue-900 mb-2">Formato del CSV:</h4>
                                     <p className="text-xs text-blue-800">
-                                        <strong>Columnas requeridas:</strong> Teléfono, Nombre, Tipo de Nave, Ubicación, Tamaño, Precio, Información Adicional, Ventajas Estratégicas
+                                        <strong>Columnas:</strong> Teléfono, Nombre, Tipo de Nave, Ubicación, Tamaño (m2), Precio (MXN), Info Adicional, Ventajas
                                     </p>
                                     <p className="text-xs text-blue-700 mt-1">
-                                        • El teléfono debe ser de 10 dígitos (sin prefijo +52)<br/>
-                                        • Tamaño: escribir "metros cuadrados" completo (ej: "500 metros cuadrados")<br/>
-                                        • Precio: escribir "pesos mexicanos" completo (ej: "3 millones de pesos mexicanos")
+                                        • Teléfono: 10 dígitos sin prefijo (ej: 7771234567)<br/>
+                                        • Tamaño: solo el número (ej: 500)<br/>
+                                        • Precio: solo el número (ej: 3500000)
                                     </p>
                                 </div>
                                 <a

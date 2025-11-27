@@ -190,6 +190,12 @@ class VoicebotDatabase {
     // ==================== APPOINTMENTS ====================
 
     async createAppointment(appointmentData) {
+        // Mapear interest_level a valores válidos del ENUM (high/medium/low)
+        let interestLevel = appointmentData.interestLevel || 'medium';
+        if (interestLevel === 'none') {
+            interestLevel = 'low'; // "none" no existe en el ENUM, mapeamos a "low"
+        }
+
         return await database.insert('voicebot_appointments', {
             call_id: appointmentData.callId,
             contact_id: appointmentData.contactId,
@@ -200,7 +206,7 @@ class VoicebotDatabase {
             appointment_time: appointmentData.time,
             appointment_datetime: appointmentData.datetime,
             appointment_notes: appointmentData.notes,
-            interest_level: appointmentData.interestLevel || 'medium',
+            interest_level: interestLevel,
             agreement_reached: appointmentData.agreementReached || false,
             status: 'scheduled'
         });

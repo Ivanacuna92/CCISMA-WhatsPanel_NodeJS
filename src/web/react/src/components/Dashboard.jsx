@@ -18,9 +18,7 @@ function Dashboard() {
     try {
       const dates = await fetchDates();
       setAvailableDates(Array.isArray(dates) ? dates : []);
-      if (dates.length > 0 && !selectedDate) {
-        setSelectedDate(dates[0]);
-      }
+      // No auto-seleccionar fecha vieja, dejar que use "Hoy" por defecto
     } catch (error) {
       console.error('Error cargando fechas:', error);
     }
