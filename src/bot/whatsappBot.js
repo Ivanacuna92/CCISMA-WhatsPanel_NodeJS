@@ -17,6 +17,7 @@ const conversationAnalyzer = require("../services/conversationAnalyzer");
 const userDataManager = require("../services/userDataManager");
 const followUpManager = require("../services/followUpManager");
 const database = require("../services/database");
+const imageService = require("../services/imageService");
 
 class WhatsAppBot {
   constructor() {
@@ -76,7 +77,7 @@ class WhatsAppBot {
         keepAliveIntervalMs: 30000,
         qrTimeout: undefined,
         markOnlineOnConnect: false,
-        msgRetryCounterCache: {},
+        msgRetryCounterCache: new Map(),
         retryRequestDelayMs: 250,
         maxMsgRetryCount: 5,
       });
@@ -321,6 +322,15 @@ class WhatsAppBot {
             }
 
             await logger.log("bot", response, userId, userName);
+
+            // Enviar imágenes pendientes si las hay
+            if (this._pendingImages && this._pendingImages.chatId === from) {
+              const pendingIds = this._pendingImages.imageIds;
+              this._pendingImages = null;
+              console.log(`[Images] Enviando ${pendingIds.length} imagen(es) a ${userId}`);
+              await this.sendImages(from, pendingIds);
+              await logger.log("SYSTEM", `Imagenes enviadas: IDs ${pendingIds.join(',')}`, userId);
+            }
           } catch (sendError) {
             console.error(`[WhatsApp] ❌ Error enviando mensaje a ${userId}:`, sendError);
             console.error(`[WhatsApp] Chat ID que falló: ${from}`);
@@ -574,6 +584,15 @@ class WhatsAppBot {
       return finalResponse;
     }
 
+    // Verificar si la respuesta contiene marcador de imágenes
+    const { cleanText: imageCleanText, imageIds } = this.parseImageMarkers(aiResponse);
+    if (imageIds.length > 0) {
+      await sessionManager.addMessage(userId, "assistant", imageCleanText, chatId);
+      // Guardar imágenes pendientes para enviar después del texto
+      this._pendingImages = { chatId, imageIds };
+      return imageCleanText;
+    }
+
     // Agregar respuesta de IA a la sesión
     await sessionManager.addMessage(userId, "assistant", aiResponse, chatId);
 
@@ -721,6 +740,57 @@ class WhatsAppBot {
     } else {
       // Solo confirmación de email sin activar soporte
       return `¡Gracias ${userData.name}! ✅\n\nHe registrado tu correo: ${email}\n\n¿En qué más puedo ayudarte?`;
+    }
+  }
+
+  /**
+   * Extrae IDs de imágenes del marcador {{ENVIAR_IMAGEN:id1,id2}} y retorna texto limpio + IDs
+   */
+  parseImageMarkers(text) {
+    const regex = /\{\{ENVIAR_IMAGEN:([\d,]+)\}\}/g;
+    const imageIds = [];
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const ids = match[1].split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
+      imageIds.push(...ids);
+    }
+    const cleanText = text.replace(regex, '').trim();
+    return { cleanText, imageIds };
+  }
+
+  /**
+   * Envía imágenes de la galería al chat de WhatsApp
+   */
+  async sendImages(chatId, imageIds) {
+    const fs = require('fs').promises;
+    const path = require('path');
+
+    for (const id of imageIds) {
+      try {
+        const image = await imageService.getById(id);
+        if (!image) {
+          console.log(`[Images] Imagen ID ${id} no encontrada, omitiendo`);
+          continue;
+        }
+
+        const imagePath = path.join(process.cwd(), image.file_path);
+        const imageBuffer = await fs.readFile(imagePath);
+
+        await this.sock.sendMessage(chatId, {
+          image: imageBuffer,
+          caption: image.title,
+          mimetype: image.mime_type
+        });
+
+        console.log(`[Images] ✅ Imagen enviada: ${image.title} (ID: ${id})`);
+
+        // Pausa entre imágenes para evitar rate limiting
+        if (imageIds.indexOf(id) < imageIds.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (error) {
+        console.error(`[Images] ❌ Error enviando imagen ID ${id}:`, error.message);
+      }
     }
   }
 
@@ -916,6 +986,14 @@ class WhatsAppBot {
       console.log(`[PendingMessages] ✅ Respuesta enviada a ${userName}`);
       console.log(`[PendingMessages] ID del mensaje: ${sendResult?.key?.id}`);
       console.log(`[PendingMessages] Status: ${sendResult?.status || 'enviado'}`);
+
+      // Enviar imágenes pendientes si las hay
+      if (this._pendingImages && this._pendingImages.chatId === from) {
+        const pendingIds = this._pendingImages.imageIds;
+        this._pendingImages = null;
+        console.log(`[PendingMessages] [Images] Enviando ${pendingIds.length} imagen(es) a ${userId}`);
+        await this.sendImages(from, pendingIds);
+      }
 
       // Enviar estado de "disponible"
       try {

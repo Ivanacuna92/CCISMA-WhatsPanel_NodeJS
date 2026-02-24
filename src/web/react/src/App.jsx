@@ -5,6 +5,8 @@ import Dashboard from './components/Dashboard';
 import Reports from './components/Reports';
 import NavesUpload from './components/NavesUpload';
 import VoicebotPanel from './components/VoicebotPanel';
+import CDRReports from './components/CDRReports';
+import ImageGallery from './components/ImageGallery';
 import Header from './components/Header';
 import Login from './components/Login';
 import { checkAuth, logout } from './services/api';
@@ -135,8 +137,12 @@ function App() {
         <Reports />
       ) : currentView === 'naves' ? (
         <NavesUpload />
+      ) : currentView === 'gallery' && user?.role === 'admin' ? (
+        <ImageGallery />
       ) : currentView === 'voicebot' && user?.role === 'admin' ? (
         <VoicebotPanel />
+      ) : currentView === 'cdr' && user?.role === 'admin' ? (
+        <CDRReports />
       ) : (
         <div className="flex flex-1 overflow-hidden">
           <ContactsList

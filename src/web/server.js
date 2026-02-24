@@ -9,6 +9,7 @@ const salesManager = require('../services/salesManager');
 const conversationAnalyzer = require('../services/conversationAnalyzer');
 const authService = require('../services/authService');
 const csvService = require('../services/csvService');
+const imageService = require('../services/imageService');
 const userDataManager = require('../services/userDataManager');
 const { requireAuth, requireAdmin, requireSupportOrAdmin } = require('../middleware/auth');
 const ViteExpress = require('vite-express');
@@ -934,6 +935,265 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
             } catch (error) {
                 console.error('Error buscando en CSV:', error);
                 res.status(500).json({ error: 'Error en la búsqueda' });
+            }
+        });
+
+        // ===== ENDPOINTS DE GALERIA DE IMAGENES (SOLO ADMIN) =====
+
+        const imageUpload = multer({
+            limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+            fileFilter: (req, file, cb) => {
+                const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+                if (allowedMimes.includes(file.mimetype)) {
+                    cb(null, true);
+                } else {
+                    cb(new Error('Solo se permiten archivos de imagen (JPEG, PNG, GIF, WEBP)'));
+                }
+            }
+        });
+
+        // Subir imagen con metadata
+        this.app.post('/api/images/upload', requireAdmin, imageUpload.single('image'), async (req, res) => {
+            try {
+                if (!req.file) {
+                    return res.status(400).json({ error: 'No se proporcionó imagen' });
+                }
+                const { title, category, description, tags } = req.body;
+                if (!title || !category) {
+                    return res.status(400).json({ error: 'Titulo y categoria son requeridos' });
+                }
+                const result = await imageService.saveImage(req.file, {
+                    title,
+                    category,
+                    description: description || '',
+                    tags: tags || '',
+                    uploadedBy: req.user?.id || null
+                });
+                res.json(result);
+            } catch (error) {
+                console.error('Error subiendo imagen:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Listar imágenes (con filtro opcional por categoría)
+        this.app.get('/api/images', requireAdmin, async (req, res) => {
+            try {
+                const { category } = req.query;
+                const images = category
+                    ? await imageService.getByCategory(category)
+                    : await imageService.getAll();
+                res.json({ images });
+            } catch (error) {
+                console.error('Error listando imágenes:', error);
+                res.status(500).json({ error: 'Error obteniendo imágenes' });
+            }
+        });
+
+        // Obtener detalle de una imagen
+        this.app.get('/api/images/:id', requireAdmin, async (req, res) => {
+            try {
+                const image = await imageService.getById(req.params.id);
+                if (!image) {
+                    return res.status(404).json({ error: 'Imagen no encontrada' });
+                }
+                res.json(image);
+            } catch (error) {
+                console.error('Error obteniendo imagen:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Eliminar imagen
+        this.app.delete('/api/images/:id', requireAdmin, async (req, res) => {
+            try {
+                const result = await imageService.delete(req.params.id);
+                res.json(result);
+            } catch (error) {
+                console.error('Error eliminando imagen:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Servir archivo de imagen (para thumbnails en el panel)
+        this.app.get('/api/images/:id/file', requireAuth, async (req, res) => {
+            try {
+                const image = await imageService.getById(req.params.id);
+                if (!image) {
+                    return res.status(404).json({ error: 'Imagen no encontrada' });
+                }
+                const filePath = path.join(process.cwd(), image.file_path);
+                res.setHeader('Content-Type', image.mime_type);
+                res.sendFile(filePath);
+            } catch (error) {
+                console.error('Error sirviendo imagen:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // ===== ENDPOINTS DE CDR ASTERISK (SOLO ADMIN) =====
+
+        // Obtener estadísticas del CDR
+        this.app.get('/api/cdr/stats', requireAdmin, async (req, res) => {
+            try {
+                const fs = require('fs').promises;
+                const cdrPath = '/var/log/asterisk/cdr-csv/Master.csv';
+
+                // Leer archivo CDR
+                let cdrContent;
+                try {
+                    cdrContent = await fs.readFile(cdrPath, 'utf8');
+                } catch (err) {
+                    return res.status(404).json({ error: 'Archivo CDR no encontrado', path: cdrPath });
+                }
+
+                // Parsear CSV
+                const lines = cdrContent.trim().split('\n').filter(line => line.trim());
+                const calls = [];
+
+                for (const line of lines) {
+                    // Parsear CSV con comillas
+                    const values = line.match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g) || [];
+                    const cleanValues = values.map(v => v.replace(/^"|"$/g, '').trim());
+
+                    if (cleanValues.length >= 17) {
+                        const [accountcode, src, dst, dcontext, clid, channel, dstchannel,
+                               lastapp, lastdata, start, answer, end, duration, billsec,
+                               disposition, amaflags, uniqueid] = cleanValues;
+
+                        // Solo procesar si tiene datos válidos
+                        if (start && disposition) {
+                            calls.push({
+                                src,
+                                dst: lastdata.includes(',') ? lastdata.split(',')[1] : dst,
+                                channel,
+                                start: new Date(start),
+                                answer: answer ? new Date(answer) : null,
+                                end: new Date(end),
+                                duration: parseInt(duration) || 0,
+                                billsec: parseInt(billsec) || 0,
+                                disposition,
+                                uniqueid
+                            });
+                        }
+                    }
+                }
+
+                // Calcular estadísticas
+                const totalCalls = calls.length;
+                const answeredCalls = calls.filter(c => c.disposition === 'ANSWERED').length;
+                const failedCalls = calls.filter(c => c.disposition !== 'ANSWERED').length;
+                const totalMinutes = Math.round(calls.reduce((sum, c) => sum + c.billsec, 0) / 60 * 100) / 100;
+                const avgDuration = totalCalls > 0 ? Math.round(calls.reduce((sum, c) => sum + c.billsec, 0) / answeredCalls) : 0;
+
+                // Fechas de primera y última llamada
+                const sortedCalls = [...calls].sort((a, b) => a.start - b.start);
+                const firstCall = sortedCalls[0] || null;
+                const lastCall = sortedCalls[sortedCalls.length - 1] || null;
+
+                // Llamada más corta y más larga (solo contestadas)
+                const answeredCallsList = calls.filter(c => c.disposition === 'ANSWERED' && c.billsec > 0);
+                answeredCallsList.sort((a, b) => a.billsec - b.billsec);
+                const shortestCall = answeredCallsList[0] || null;
+                const longestCall = answeredCallsList[answeredCallsList.length - 1] || null;
+
+                // Llamadas por día
+                const callsByDay = {};
+                calls.forEach(call => {
+                    const day = call.start.toISOString().split('T')[0];
+                    if (!callsByDay[day]) {
+                        callsByDay[day] = { total: 0, answered: 0, failed: 0, minutes: 0 };
+                    }
+                    callsByDay[day].total++;
+                    if (call.disposition === 'ANSWERED') {
+                        callsByDay[day].answered++;
+                        callsByDay[day].minutes += call.billsec / 60;
+                    } else {
+                        callsByDay[day].failed++;
+                    }
+                });
+
+                // Distribución por hora
+                const callsByHour = Array(24).fill(0).map((_, i) => ({ hour: i, calls: 0, answered: 0 }));
+                calls.forEach(call => {
+                    const hour = call.start.getHours();
+                    callsByHour[hour].calls++;
+                    if (call.disposition === 'ANSWERED') {
+                        callsByHour[hour].answered++;
+                    }
+                });
+
+                // Estado de llamadas (disposition)
+                const dispositionStats = {};
+                calls.forEach(call => {
+                    if (!dispositionStats[call.disposition]) {
+                        dispositionStats[call.disposition] = 0;
+                    }
+                    dispositionStats[call.disposition]++;
+                });
+
+                // Días activos
+                const activeDays = Object.keys(callsByDay).length;
+                const callsPerDay = activeDays > 0 ? Math.round(totalCalls / activeDays * 100) / 100 : 0;
+
+                // Convertir callsByDay a array para gráficas
+                const callsByDayArray = Object.entries(callsByDay)
+                    .map(([date, data]) => ({
+                        date,
+                        ...data,
+                        minutes: Math.round(data.minutes * 100) / 100
+                    }))
+                    .sort((a, b) => a.date.localeCompare(b.date));
+
+                // Convertir disposition a array para gráfica de pie
+                const dispositionArray = Object.entries(dispositionStats)
+                    .map(([name, value]) => ({ name, value }));
+
+                res.json({
+                    summary: {
+                        totalCalls,
+                        answeredCalls,
+                        failedCalls,
+                        totalMinutes,
+                        avgDuration,
+                        callsPerDay,
+                        activeDays
+                    },
+                    firstCall: firstCall ? {
+                        date: firstCall.start.toISOString(),
+                        dst: firstCall.dst,
+                        duration: firstCall.billsec
+                    } : null,
+                    lastCall: lastCall ? {
+                        date: lastCall.start.toISOString(),
+                        dst: lastCall.dst,
+                        duration: lastCall.billsec
+                    } : null,
+                    shortestCall: shortestCall ? {
+                        date: shortestCall.start.toISOString(),
+                        dst: shortestCall.dst,
+                        duration: shortestCall.billsec
+                    } : null,
+                    longestCall: longestCall ? {
+                        date: longestCall.start.toISOString(),
+                        dst: longestCall.dst,
+                        duration: longestCall.billsec
+                    } : null,
+                    callsByDay: callsByDayArray,
+                    callsByHour,
+                    dispositionStats: dispositionArray,
+                    recentCalls: sortedCalls.slice(-100).reverse().map(c => ({
+                        date: c.start.toISOString(),
+                        dst: c.dst,
+                        duration: c.billsec,
+                        disposition: c.disposition,
+                        channel: c.channel,
+                        uniqueid: c.uniqueid
+                    }))
+                });
+            } catch (error) {
+                console.error('Error obteniendo CDR stats:', error);
+                res.status(500).json({ error: 'Error obteniendo estadísticas CDR', details: error.message });
             }
         });
 

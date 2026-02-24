@@ -347,10 +347,58 @@ export async function deleteCSV(filename) {
   const response = await fetchWithCredentials(`${API_BASE}/csv/delete/${filename}`, {
     method: 'DELETE'
   });
-  
+
   if (!response.ok) {
     throw new Error('Error al eliminar archivo CSV');
   }
-  
+
   return response.json();
+}
+
+// ===== FUNCIONES DE GALERIA DE IMAGENES =====
+
+export async function uploadImage(formData) {
+  const response = await fetch(`${API_BASE}/images/upload`, {
+    method: 'POST',
+    credentials: 'include',
+    body: formData
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json();
+    const error = new Error(errorData.error || 'Error al cargar imagen');
+    error.response = { data: errorData };
+    throw error;
+  }
+
+  return response.json();
+}
+
+export async function getImages(category = null) {
+  const url = category
+    ? `${API_BASE}/images?category=${encodeURIComponent(category)}`
+    : `${API_BASE}/images`;
+  const response = await fetchWithCredentials(url);
+
+  if (!response.ok) {
+    throw new Error('Error al obtener imagenes');
+  }
+
+  return response.json();
+}
+
+export async function deleteImage(id) {
+  const response = await fetchWithCredentials(`${API_BASE}/images/${id}`, {
+    method: 'DELETE'
+  });
+
+  if (!response.ok) {
+    throw new Error('Error al eliminar imagen');
+  }
+
+  return response.json();
+}
+
+export function getImageUrl(id) {
+  return `${API_BASE}/images/${id}/file`;
 }

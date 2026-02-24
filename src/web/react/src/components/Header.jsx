@@ -54,6 +54,18 @@ function Header({ currentView, onViewChange, user, onLogout }) {
           {user?.role === 'admin' && (
             <button
               className={`px-8 py-2 rounded-md font-medium transition-all ${
+                currentView === 'gallery'
+                  ? 'bg-navetec-primary text-white'
+                  : 'text-gray-600 hover:text-navetec-primary'
+              }`}
+              onClick={() => onViewChange('gallery')}
+            >
+              Galeria
+            </button>
+          )}
+          {user?.role === 'admin' && (
+            <button
+              className={`px-8 py-2 rounded-md font-medium transition-all ${
                 currentView === 'voicebot'
                   ? 'bg-navetec-primary text-white'
                   : 'text-gray-600 hover:text-navetec-primary'
@@ -61,6 +73,18 @@ function Header({ currentView, onViewChange, user, onLogout }) {
               onClick={() => onViewChange('voicebot')}
             >
               Voicebot
+            </button>
+          )}
+          {user?.role === 'admin' && (
+            <button
+              className={`px-8 py-2 rounded-md font-medium transition-all ${
+                currentView === 'cdr'
+                  ? 'bg-navetec-primary text-white'
+                  : 'text-gray-600 hover:text-navetec-primary'
+              }`}
+              onClick={() => onViewChange('cdr')}
+            >
+              CDR
             </button>
           )}
         </nav>

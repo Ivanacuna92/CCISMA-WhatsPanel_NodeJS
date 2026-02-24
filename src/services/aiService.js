@@ -1,6 +1,7 @@
 const axios = require('axios');
 const config = require('../config/config');
 const csvService = require('./csvService');
+const imageService = require('./imageService');
 
 class AIService {
     constructor() {
@@ -104,7 +105,17 @@ Responde ÚNICAMENTE con una de estas palabras: ACEPTADO, RECHAZADO, FRUSTRADO, 
             if (systemMessage) {
                 systemMessage.content = systemMessage.content + `\n\n*BASE DE DATOS DE NAVES DISPONIBLES:*\n\n${csvData}\n\nUsa esta información cuando el usuario pregunte sobre naves, parques industriales, precios, disponibilidad o cualquier tema relacionado. Si el usuario pregunta por algo específico que está en esta base de datos, úsala para responder de manera precisa y actualizada.`;
             }
-            
+
+            // Inyectar galería de imágenes disponibles
+            try {
+                const imageSummary = await imageService.getImageSummaryForPrompt();
+                if (imageSummary && systemMessage) {
+                    systemMessage.content += `\n\n*GALERIA DE IMAGENES DISPONIBLES:*\n\n${imageSummary}`;
+                }
+            } catch (imgError) {
+                console.error('Error agregando imágenes al prompt:', imgError);
+            }
+
             return enrichedMessages;
         } catch (error) {
             console.error('Error agregando datos CSV al prompt:', error);
