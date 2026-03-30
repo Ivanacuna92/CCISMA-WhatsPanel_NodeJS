@@ -11,10 +11,10 @@ class CampaignManager extends EventEmitter {
     constructor() {
         super();
         this.activeCampaigns = new Map();
-        this.maxConcurrentCalls = parseInt(process.env.VOICEBOT_CONCURRENT_CALLS) || 2;
         this.activeCallsCount = 0;
         this.callHandlers = new Map();
         this.commonResponses = new Map(); // Respuestas pre-cacheadas
+        this.currentCampaignMaxCalls = 2; // Se actualiza dinámicamente según contactos de la campaña
     }
 
     async initialize() {
@@ -38,8 +38,12 @@ class CampaignManager extends EventEmitter {
 
         // Escuchar llamadas fallidas
         ariManager.on('callFailed', (data) => {
-            console.log(`📴 Llamada fallida detectada: ${data.reason}`);
-            // El timeout de 45s se encargará de limpiar el slot
+            console.log(`📴 Llamada fallida detectada: ${data.reason} (phone: ${data.phoneNumber || 'unknown'})`);
+
+            // Si tenemos el phoneNumber, limpiar el slot inmediatamente
+            if (data.phoneNumber) {
+                this.handleCallFailed(data.phoneNumber, data.reason);
+            }
         });
 
         // Limpiar grabaciones antiguas cada hora
@@ -57,9 +61,8 @@ class CampaignManager extends EventEmitter {
     // Pre-genera respuestas comunes para respuestas instantáneas
     async preGenerateCommonResponses() {
         const responses = {
-            // Despedidas
+            // Despedidas - solo positiva, la negativa la maneja GPT con contexto
             'despedida_positiva': 'Perfecto, entonces te espero. Que tengas buen día.',
-            'despedida_negativa': 'Entendido, gracias por tu tiempo. Que tengas buen día.',
             // Confirmaciones de cita
             'confirmar_hora': '¿A qué hora te quedaría bien?',
             'confirmar_dia': '¿Qué día te acomoda mejor?',
@@ -74,13 +77,15 @@ class CampaignManager extends EventEmitter {
             'si_miercoles': 'Perfecto, el miércoles entonces. ¿A qué hora te queda bien?',
             'si_jueves': 'Perfecto, el jueves entonces. ¿A qué hora te queda bien?',
             'si_viernes': 'Perfecto, el viernes entonces. ¿A qué hora te queda bien?',
-            // Respuestas a preguntas comunes
-            'mas_info': '¿Qué te gustaría saber?',
-            'donde_ubicada': 'La nave está muy bien ubicada, cerca de vías principales. ¿Te gustaría visitarla?',
+            // Respuestas a preguntas comunes (NO incluir preguntas de info de nave - esas van a GPT)
             'como_agendar': 'Solo dime qué día y hora te acomodan y listo.',
             // Continuación de conversación
             'entendido': 'Entendido.',
-            'ok_continuo': 'De acuerdo, te cuento más.'
+            'ok_continuo': 'De acuerdo, te cuento más.',
+            // Preguntas de identidad - quién habla, de dónde llaman
+            'quien_habla': 'Te habla un asesor de Navetec, una empresa de naves industriales. Te llamo porque tenemos una nave disponible que podría interesarte.',
+            'que_empresa': 'Soy de Navetec, nos dedicamos a la venta de naves industriales. ¿Tienes un momento para que te cuente de una nave disponible?',
+            'que_quieren': 'Te llamo de Navetec para comentarte sobre una nave industrial que tenemos disponible y que podría interesarte. ¿Me permites un momento?'
         };
 
         const asteriskSoundsPath = '/usr/share/asterisk/sounds/custom';
@@ -126,6 +131,24 @@ class CampaignManager extends EventEmitter {
     detectCommonResponse(clientText) {
         const text = clientText.toLowerCase().trim();
 
+        // PRIORIDAD 1: Detectar cuando el cliente pide que repitan
+        // Esto es crítico - si no lo manejamos bien, el bot dice pendejadas
+        if (/\b(qué dijiste|que dijiste|cómo|como|mande|perdón|perdon|no te escuché|no te escuche|no escuché|no escuche|repite|repíteme|repetir|no entendí|no entendi|qué|que)\b/i.test(text) &&
+            text.length < 25) {
+            return 'pide_repetir';
+        }
+
+        // PRIORIDAD 2: Detectar preguntas de identidad - quién habla, de dónde llaman
+        if (/\b(quién habla|quien habla|quién es|quien es|con quién hablo|con quien hablo|de dónde|de donde|de qué empresa|de que empresa|qué empresa|que empresa)\b/i.test(text)) {
+            return 'quien_habla';
+        }
+        if (/\b(qué quieren|que quieren|para qué|para que|por qué me llaman|por que me llaman|a qué se dedican|a que se dedican)\b/i.test(text)) {
+            return 'que_quieren';
+        }
+        if (/\b(quiénes son|quienes son|qué es navetec|que es navetec|navetec qué es|navetec que es)\b/i.test(text)) {
+            return 'que_empresa';
+        }
+
         // Detectar días específicos
         if (/\b(mañana|manana)\b/i.test(text) && /\b(sí|si|claro|va|dale|ok|está bien|esta bien)\b/i.test(text)) {
             return 'si_manana';
@@ -142,21 +165,19 @@ class CampaignManager extends EventEmitter {
             return 'cita_agendada';
         }
 
-        // Detectar pregunta de ubicación
-        if (/\b(dónde|donde|ubicación|ubicacion|dirección|direccion)\b/i.test(text)) {
-            return 'donde_ubicada';
-        }
+        // NO detectar preguntas de ubicación, precio, tamaño, etc. como respuestas comunes
+        // Esas preguntas deben ir a GPT para que responda con los datos REALES de la nave
+        // Las siguientes preguntas van directo a GPT:
+        // - dónde está, ubicación, dirección
+        // - cuánto cuesta, precio
+        // - cuántos metros, tamaño
+        // - qué tipo de nave
+        // - ventajas, beneficios
+        // - más información, detalles
 
-        // Detectar pregunta de más información
-        if (/\b(más|mas|info|información|informacion|detalles|cuéntame|cuentame)\b/i.test(text) &&
-            text.length < 30) {
-            return 'mas_info';
-        }
-
-        // Detectar despedida negativa
-        if (/\b(no gracias|no me interesa|no puedo|ocupado|después|despues|luego)\b/i.test(text)) {
-            return 'despedida_negativa';
-        }
+        // NO detectar despedida negativa aquí - dejar que GPT maneje el flujo
+        // Palabras como "después", "luego", "ocupado" NO son rechazos claros
+        // Solo GPT debe decidir cuándo despedirse basándose en el contexto completo
 
         return null;
     }
@@ -172,7 +193,10 @@ class CampaignManager extends EventEmitter {
             const records = parse(fileContent, {
                 columns: true,
                 skip_empty_lines: true,
-                trim: true
+                trim: true,
+                bom: true,  // Ignorar BOM de Excel/Windows
+                relax_quotes: true,  // Tolerar comillas en campos multilínea
+                relax_column_count: true  // Tolerar filas con diferente número de columnas
             });
 
             if (records.length === 0) {
@@ -191,32 +215,66 @@ class CampaignManager extends EventEmitter {
 
             // Agregar contactos
             let addedCount = 0;
-            for (const record of records) {
-                // Buscar precio en varias columnas posibles
-                const rawPrice = record['Precio (MXN)'] || record['Precio(MXN)'] || record.Precio || record.Price || '';
-                const rawSize = record['Tamaño (m2)'] || record['Tamaño(m2)'] || record.Tamaño || record.Size || '';
+            const rejectedContacts = [];
 
-                console.log(`📋 Parseando contacto: ${record.Nombre}, Precio raw: "${rawPrice}", Tamaño raw: "${rawSize}"`);
+            for (const record of records) {
+                // Buscar campos en varias columnas posibles
+                const rawPhone = record['Teléfono'] || record['Telefono'] || record['Phone'] || record['Tel'] || '';
+                const rawName = record['Nombre'] || record['Name'] || '';
+                const rawNaveType = record['Tipo de Nave'] || record['Tipo'] || '';
+                const rawLocation = record['Ubicación'] || record['Ubicacion'] || record['Location'] || '';
+                const rawSize = record['Tamaño (m2)'] || record['Tamaño(m2)'] || record['Tamaño'] || record['Size'] || '';
+                const rawPrice = record['Precio (MXN)'] || record['Precio(MXN)'] || record['Precio'] || record['Price'] || '';
+                const rawExtraInfo = record['Información Adicional'] || record['Info'] || '';
+                const rawAdvantages = record['Ventajas Estratégicas'] || record['Ventajas'] || '';
+
+                console.log(`📋 Parseando contacto: ${rawName}, Tel: "${rawPhone}", Precio: "${rawPrice}", Tamaño: "${rawSize}"`);
+
+                // Validar campos obligatorios
+                const missingFields = [];
+                if (!rawPhone) missingFields.push('Teléfono');
+                if (!rawName) missingFields.push('Nombre');
+                if (!rawNaveType) missingFields.push('Tipo de Nave');
+                if (!rawLocation) missingFields.push('Ubicación');
+                if (!rawSize) missingFields.push('Tamaño');
+                if (!rawPrice) missingFields.push('Precio');
+                if (!rawExtraInfo) missingFields.push('Información Adicional');
+                if (!rawAdvantages) missingFields.push('Ventajas Estratégicas');
+
+                if (missingFields.length > 0) {
+                    const contactName = rawName || rawPhone || 'Sin identificar';
+                    console.log(`⚠️ Contacto rechazado: ${contactName} - Faltan: ${missingFields.join(', ')}`);
+                    rejectedContacts.push({
+                        name: contactName,
+                        phone: rawPhone,
+                        missingFields: missingFields
+                    });
+                    continue; // Saltar este contacto
+                }
 
                 await voicebotDB.addContact(campaignId, {
-                    phone: this.cleanPhoneNumber(record.Teléfono || record.Telefono || record.Phone),
-                    name: record.Nombre || record.Name || 'Cliente',
-                    naveType: record['Tipo de Nave'] || record['Tipo'] || '',
-                    location: record.Ubicación || record.Ubicacion || record.Location || '',
+                    phone: this.cleanPhoneNumber(rawPhone),
+                    name: rawName,
+                    naveType: rawNaveType,
+                    location: rawLocation,
                     size: rawSize,
                     price: rawPrice,
-                    extraInfo: record['Información Adicional'] || record.Info || '',
-                    advantages: record['Ventajas Estratégicas'] || record.Ventajas || ''
+                    extraInfo: rawExtraInfo,
+                    advantages: rawAdvantages
                 });
                 addedCount++;
             }
 
             console.log(`✅ ${addedCount} contactos agregados a la campaña`);
+            if (rejectedContacts.length > 0) {
+                console.log(`⚠️ ${rejectedContacts.length} contactos rechazados por datos incompletos`);
+            }
 
             return {
                 success: true,
                 campaignId: campaignId,
-                contactsAdded: addedCount
+                contactsAdded: addedCount,
+                rejectedContacts: rejectedContacts
             };
         } catch (error) {
             console.error('❌ Error creando campaña:', error);
@@ -257,6 +315,24 @@ class CampaignManager extends EventEmitter {
                 throw new Error('La campaña ya está en ejecución');
             }
 
+            // Si la campaña estaba completada, resetear los contactos para reiniciar
+            if (campaign.status === 'completed') {
+                console.log(`🔄 Reseteando contactos de campaña ${campaignId} para reiniciar...`);
+                await voicebotDB.resetCampaignContacts(campaignId);
+            }
+
+            // Verificar que hay contactos pendientes
+            const pendingContacts = await voicebotDB.getPendingContacts(campaignId, 1);
+            if (pendingContacts.length === 0) {
+                // Resetear contactos si no hay pendientes
+                console.log(`⚠️ No hay contactos pendientes, reseteando...`);
+                await voicebotDB.resetCampaignContacts(campaignId);
+            }
+
+            // Establecer límite de llamadas concurrentes igual al número de contactos
+            this.currentCampaignMaxCalls = campaign.total_contacts || 1;
+            console.log(`📊 Límite de llamadas concurrentes establecido a ${this.currentCampaignMaxCalls} (total de contactos)`);
+
             // Actualizar estado
             await voicebotDB.updateCampaignStatus(campaignId, 'running');
 
@@ -264,10 +340,11 @@ class CampaignManager extends EventEmitter {
             this.activeCampaigns.set(campaignId, {
                 id: campaignId,
                 status: 'running',
-                startTime: new Date()
+                startTime: new Date(),
+                maxConcurrentCalls: this.currentCampaignMaxCalls
             });
 
-            console.log(`🚀 Campaña ${campaignId} iniciada`);
+            console.log(`🚀 Campaña ${campaignId} iniciada con ${this.currentCampaignMaxCalls} llamadas simultáneas máximas`);
 
             // Procesar llamadas en cola
             this.processCallQueue(campaignId);
@@ -294,6 +371,24 @@ class CampaignManager extends EventEmitter {
         console.log(`⏹️  Campaña ${campaignId} detenida`);
     }
 
+    // Verificar si la campaña terminó (todas las llamadas completadas)
+    async checkCampaignCompletion(campaignId) {
+        const campaign = this.activeCampaigns.get(campaignId);
+        if (!campaign || campaign.status !== 'running') return;
+
+        // Verificar si hay contactos pendientes o llamadas activas para esta campaña
+        const pendingContacts = await voicebotDB.getPendingContacts(campaignId, 1);
+        const activeCallsForCampaign = Array.from(this.callHandlers.values())
+            .filter(h => h.contact?.campaign_id === campaignId).length;
+
+        console.log(`📊 Verificando campaña ${campaignId}: pendientes=${pendingContacts.length}, activas=${activeCallsForCampaign}`);
+
+        if (pendingContacts.length === 0 && activeCallsForCampaign === 0) {
+            console.log(`✅ [CampaignManager] Campaña ${campaignId} completada - todas las llamadas terminaron`);
+            await this.stopCampaign(campaignId);
+        }
+    }
+
     // ==================== COLA DE LLAMADAS ====================
 
     async processCallQueue(campaignId) {
@@ -311,22 +406,30 @@ class CampaignManager extends EventEmitter {
         }
 
         // Verificar límite de llamadas concurrentes
-        if (this.activeCallsCount >= this.maxConcurrentCalls) {
-            console.log(`⏳ Esperando slot... (${this.activeCallsCount}/${this.maxConcurrentCalls})`);
+        if (this.activeCallsCount >= this.currentCampaignMaxCalls) {
+            console.log(`⏳ Esperando slot... (${this.activeCallsCount}/${this.currentCampaignMaxCalls})`);
             setTimeout(() => this.processCallQueue(campaignId), 5000);
             return;
         }
 
-        console.log(`📞 Procesando cola - Slots disponibles: ${this.maxConcurrentCalls - this.activeCallsCount}`);
+        console.log(`📞 Procesando cola - Slots disponibles: ${this.currentCampaignMaxCalls - this.activeCallsCount}`);
 
         // Obtener siguiente contacto pendiente
         const pendingContacts = await voicebotDB.getPendingContacts(campaignId, 1);
 
         if (pendingContacts.length === 0) {
+            // Verificar si hay llamadas activas antes de terminar
+            if (this.activeCallsCount > 0) {
+                console.log(`⏳ No hay contactos pendientes pero hay ${this.activeCallsCount} llamadas activas, esperando...`);
+                setTimeout(() => this.processCallQueue(campaignId), 5000);
+                return;
+            }
             console.log(`✅ No hay más contactos pendientes en campaña ${campaignId}`);
             await this.stopCampaign(campaignId);
             return;
         }
+
+        console.log(`📋 Contacto pendiente encontrado: ${pendingContacts[0].phone_number} (ID: ${pendingContacts[0].id})`)
 
         const contact = pendingContacts[0];
 
@@ -354,7 +457,7 @@ class CampaignManager extends EventEmitter {
             );
 
             console.log(`✅ Llamada originada via ARI: ${contact.phone_number}`);
-            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.currentCampaignMaxCalls}`);
 
             // Guardar handler para esta llamada (usando phoneNumber como key)
             this.callHandlers.set(contact.phone_number, {
@@ -381,8 +484,11 @@ class CampaignManager extends EventEmitter {
             console.error(`❌ Error haciendo llamada a ${contact.phone_number}:`, error);
 
             this.activeCallsCount--;
-            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.currentCampaignMaxCalls}`);
             await voicebotDB.updateContactStatus(contact.id, 'failed');
+
+            // Verificar si la campaña terminó
+            await this.checkCampaignCompletion(contact.campaign_id);
 
             throw error;
         }
@@ -397,6 +503,8 @@ class CampaignManager extends EventEmitter {
 
         console.log(`📴 Liberando slot por timeout: ${phoneNumber}`);
 
+        const campaignId = handler.contact?.campaign_id;
+
         // Marcar contacto como no_answer
         try {
             await voicebotDB.updateContactStatus(handler.contact.id, 'no_answer');
@@ -407,7 +515,54 @@ class CampaignManager extends EventEmitter {
         // Limpiar
         this.callHandlers.delete(phoneNumber);
         this.activeCallsCount--;
-        console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+        console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.currentCampaignMaxCalls}`);
+
+        // Verificar si la campaña terminó
+        if (campaignId) {
+            await this.checkCampaignCompletion(campaignId);
+        }
+    }
+
+    // Manejar llamada fallida (canal destruido, busy, etc.)
+    async handleCallFailed(phoneNumber, reason) {
+        const handler = this.callHandlers.get(phoneNumber);
+        if (!handler) {
+            console.log(`⚠️ handleCallFailed: No se encontró handler para ${phoneNumber}`);
+            return;
+        }
+
+        // Si la llamada ya fue contestada, no hacer nada (el flujo normal se encarga)
+        if (handler.answered) {
+            console.log(`ℹ️ Llamada ${phoneNumber} ya fue contestada, ignorando callFailed`);
+            return;
+        }
+
+        console.log(`📴 Liberando slot por fallo (${reason}): ${phoneNumber}`);
+
+        const campaignId = handler.contact?.campaign_id;
+
+        // Cancelar el timeout si existe
+        if (handler.timeout) {
+            clearTimeout(handler.timeout);
+            handler.timeout = null;
+        }
+
+        // Marcar contacto como failed
+        try {
+            await voicebotDB.updateContactStatus(handler.contact.id, 'failed');
+        } catch (err) {
+            console.error('Error actualizando estado:', err);
+        }
+
+        // Limpiar
+        this.callHandlers.delete(phoneNumber);
+        this.activeCallsCount--;
+        console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.currentCampaignMaxCalls}`);
+
+        // Verificar si la campaña terminó
+        if (campaignId) {
+            await this.checkCampaignCompletion(campaignId);
+        }
     }
 
     async handleCallAnswered(callData) {
@@ -424,7 +579,7 @@ class CampaignManager extends EventEmitter {
             if (!callHandler) {
                 console.error('⚠️  No se encontró información del contacto para esta llamada');
                 this.activeCallsCount--;
-                console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+                console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.currentCampaignMaxCalls}`);
                 await ariManager.hangup(channelId);
                 return;
             }
@@ -463,17 +618,26 @@ class CampaignManager extends EventEmitter {
             await voicebotDB.updateCallStatus(dbCallId, 'completed', new Date());
 
             this.activeCallsCount--;
-            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.currentCampaignMaxCalls}`);
 
             // Limpiar handler
             this.callHandlers.delete(phoneNumber);
 
+            // Verificar si la campaña terminó
+            await this.checkCampaignCompletion(contact.campaign_id);
+
         } catch (error) {
             console.error('❌ Error manejando llamada contestada:', error);
+            const campaignId = callHandler?.contact?.campaign_id;
             this.activeCallsCount--;
-            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.maxConcurrentCalls}`);
+            console.log(`📊 Llamadas activas: ${this.activeCallsCount}/${this.currentCampaignMaxCalls}`);
             // Limpiar handler en caso de error también
             this.callHandlers.delete(phoneNumber);
+
+            // Verificar si la campaña terminó (incluso con error)
+            if (campaignId) {
+                await this.checkCampaignCompletion(campaignId);
+            }
         }
     }
 
@@ -482,8 +646,8 @@ class CampaignManager extends EventEmitter {
 
         const conversationId = `call_${callId}`;
         let turnCount = 0;
-        const maxTurns = 8; // Máximo 8 intercambios
-        const startTime = Date.now();
+        // Sin límites artificiales - la conversación fluye naturalmente
+        // Solo termina cuando el cliente cuelga o hay una despedida natural
 
         // Contexto del cliente
         const context = {
@@ -501,11 +665,15 @@ class CampaignManager extends EventEmitter {
         let preCachedPitchAudio = null;
 
         try {
-            // ===== SALUDO INICIAL (solo pregunta si tiene un momento) =====
-            const greeting = `Hola ${contact.client_name || ''}, te llamo de Navetec. Tenemos una nave industrial que podría interesarte. ¿Tienes un momento para que te cuente?`;
+            // ===== SALUDO INICIAL (tono consultivo, no vendedor) =====
+            const greeting = `Hola ${contact.client_name || ''}, te saluda un asesor de Navetec. Estoy revisando tu registro y quería actualizarte sobre una nave industrial que tenemos disponible. ¿Tienes un momento?`;
 
             // Iniciar pre-generación del pitch EN PARALELO con el saludo
-            const pitchPreGenPromise = this.preGeneratePitchAudio(pitch, callId);
+            // IMPORTANTE: Capturar errores inmediatamente para evitar unhandled rejection
+            const pitchPreGenPromise = this.preGeneratePitchAudio(pitch, callId).catch(err => {
+                console.log('⚠️ Error pre-generando pitch (se generará en tiempo real):', err.message);
+                return null; // Retornar null para indicar que falló
+            });
 
             await this.speakToClient(bridgeId, greeting, callId, turnCount++, 'bot', conversationId);
 
@@ -513,24 +681,16 @@ class CampaignManager extends EventEmitter {
             openaiVoice.addToConversationHistory(conversationId, 'assistant', greeting);
 
             // Esperar a que termine la pre-generación (si no terminó durante el saludo)
-            try {
-                preCachedPitchAudio = await pitchPreGenPromise;
+            // El .catch() ya fue agregado arriba, así que esto retornará null si falló
+            preCachedPitchAudio = await pitchPreGenPromise;
+            if (preCachedPitchAudio) {
                 console.log(`✅ Pitch pre-generado listo: ${preCachedPitchAudio}`);
-            } catch (err) {
-                console.log('⚠️ Pre-generación falló, se generará en tiempo real');
             }
 
             // ===== CICLO DE CONVERSACIÓN =====
             let isFirstResponse = true; // Para usar el audio pre-generado
-            while (turnCount < maxTurns) {
-                // Verificar timeout (5 minutos máximo)
-                const elapsedTime = (Date.now() - startTime) / 1000;
-                const maxDuration = parseInt(process.env.VOICEBOT_MAX_CALL_DURATION) || 300;
-
-                if (elapsedTime > maxDuration) {
-                    console.log('⏰ Tiempo máximo de llamada alcanzado');
-                    break;
-                }
+            while (true) {
+                // Sin límites de tiempo ni turnos - la conversación fluye naturalmente
 
                 // ===== ESCUCHAR AL CLIENTE =====
                 console.log(`👂 Esperando respuesta del cliente (turno ${turnCount})...`);
@@ -545,46 +705,77 @@ class CampaignManager extends EventEmitter {
                 );
 
                 if (!recordedPath) {
-                    console.log('⚠️  No se pudo grabar audio');
+                    console.log('📴 Fin de conversación (usuario colgó o no se pudo grabar)');
                     break;
                 }
 
-                // ===== TRANSCRIBIR EN PARALELO CON VERIFICACIÓN DE RESPUESTAS =====
+                // ===== TRANSCRIBIR CON REINTENTOS SILENCIOSOS =====
+                // Si hay alucinación o vacío, volver a grabar SIN decir nada (hasta 3 intentos)
                 const processStartTime = Date.now();
                 let transcription;
-                try {
-                    // Ejecutar Whisper Y verificar respuestas comunes en paralelo
-                    const whisperStart = Date.now();
-                    const [whisperResult, _] = await Promise.all([
-                        openaiVoice.transcribeAudio(recordedPath),
-                        this.ensureCommonResponsesLoaded() // Verificar que estén listas
-                    ]);
-                    transcription = whisperResult;
-                    console.log(`⚡ Whisper: ${Date.now() - whisperStart}ms`);
-                } catch (error) {
-                    console.error('❌ Error transcribiendo:', error);
-                    // Pedir que repita
-                    await this.speakToClient(
-                        bridgeId,
-                        'Perdona, no te escuché bien. ¿Podrías repetir?',
-                        callId,
-                        turnCount++,
-                        'bot',
-                        conversationId
-                    );
-                    continue;
+                let silentRetries = 0;
+                const maxSilentRetries = 3;
+
+                while (silentRetries < maxSilentRetries) {
+                    try {
+                        // Ejecutar Whisper Y verificar respuestas comunes en paralelo
+                        const whisperStart = Date.now();
+                        const [whisperResult, _] = await Promise.all([
+                            openaiVoice.transcribeAudio(recordedPath),
+                            this.ensureCommonResponsesLoaded() // Verificar que estén listas
+                        ]);
+                        transcription = whisperResult;
+                        console.log(`⚡ Whisper: ${Date.now() - whisperStart}ms`);
+
+                        // Si tenemos transcripción válida, salir del loop
+                        if (transcription && transcription.text && transcription.text.trim() !== '') {
+                            break;
+                        }
+
+                        // Transcripción vacía o alucinación - reintentar en silencio
+                        silentRetries++;
+                        console.log(`🔄 Transcripción vacía/alucinación, reintento silencioso ${silentRetries}/${maxSilentRetries}`);
+
+                        if (silentRetries < maxSilentRetries) {
+                            // Volver a grabar sin decir nada
+                            const retryAudioPath = audioHandler.generateAudioPath(callId, turnCount, `retry${silentRetries}`);
+                            recordedPath = await ariManager.recordAudioFromBridge(bridgeId, retryAudioPath, 3);
+                            if (!recordedPath) {
+                                console.log('📴 Fin de conversación en reintento (usuario colgó)');
+                                break;
+                            }
+                        }
+                    } catch (error) {
+                        console.error('❌ Error transcribiendo:', error);
+                        silentRetries++;
+                        if (silentRetries >= maxSilentRetries) {
+                            // Solo después de 3 intentos fallidos, pedir que repita
+                            await this.speakToClient(
+                                bridgeId,
+                                'Perdona, no te escuché bien. ¿Podrías repetir?',
+                                callId,
+                                turnCount++,
+                                'bot',
+                                conversationId
+                            );
+                            break;
+                        }
+                    }
                 }
 
+                // Si después de todos los reintentos sigue vacío, ahora sí pedir que hable
                 if (!transcription || !transcription.text || transcription.text.trim() === '') {
-                    console.log('⚠️  Transcripción vacía');
-                    await this.speakToClient(
-                        bridgeId,
-                        '¿Podrías hablar más cerca del teléfono?',
-                        callId,
-                        turnCount++,
-                        'bot',
-                        conversationId
-                    );
+                    if (silentRetries >= maxSilentRetries) {
+                        console.log('⚠️  Transcripción vacía después de reintentos');
+                        await this.speakToClient(
+                            bridgeId,
+                            '¿Sigues ahí? No te escucho bien.',
+                            callId,
+                            turnCount++,
+                            'bot',
+                            conversationId
+                        );
+                    }
                     continue;
                 }
 
@@ -643,6 +834,34 @@ class CampaignManager extends EventEmitter {
                 const detectedCommon = this.detectCommonResponse(transcription.text);
 
                 if (detectedCommon) {
+                    // CASO ESPECIAL: Cliente pide que repitan
+                    if (detectedCommon === 'pide_repetir') {
+                        console.log('🔄 Cliente pidió que repitamos - buscando última respuesta del bot');
+
+                        // Buscar la última respuesta del bot en el historial
+                        const history = openaiVoice.getConversationContext(conversationId);
+                        let lastBotMessage = null;
+
+                        for (let i = history.length - 1; i >= 0; i--) {
+                            if (history[i].role === 'assistant') {
+                                lastBotMessage = history[i].content;
+                                break;
+                            }
+                        }
+
+                        if (lastBotMessage) {
+                            console.log(`🔄 Repitiendo: "${lastBotMessage}"`);
+                            await this.speakToClient(bridgeId, lastBotMessage, callId, turnCount++, 'bot', conversationId);
+                            // No agregar al historial porque es repetición
+                            continue;
+                        } else {
+                            // Si no hay historial, repetir el pitch
+                            console.log('🔄 No hay historial, repitiendo pitch');
+                            await this.speakToClient(bridgeId, pitch, callId, turnCount++, 'bot', conversationId);
+                            continue;
+                        }
+                    }
+
                     const commonAudio = this.commonResponses.get(detectedCommon);
                     if (commonAudio) {
                         console.log(`⚡ Respuesta común detectada: ${detectedCommon}`);
@@ -658,20 +877,18 @@ class CampaignManager extends EventEmitter {
                             'cita_agendada': 'Perfecto, te agendo. Te esperamos.',
                             'confirmar_dia': '¿Qué día te acomoda mejor?',
                             'confirmar_hora': '¿A qué hora te quedaría bien?',
-                            'donde_ubicada': 'La nave está muy bien ubicada, cerca de vías principales. ¿Te gustaría visitarla?',
-                            'mas_info': '¿Qué te gustaría saber?',
-                            'despedida_negativa': 'Entendido, gracias por tu tiempo. Que tengas buen día.'
+                            // Respuestas de identidad
+                            'quien_habla': 'Te habla un asesor de Navetec, una empresa de naves industriales. Te llamo porque tenemos una nave disponible que podría interesarte.',
+                            'que_empresa': 'Soy de Navetec, nos dedicamos a la venta de naves industriales. ¿Tienes un momento para que te cuente de una nave disponible?',
+                            'que_quieren': 'Te llamo de Navetec para comentarte sobre una nave industrial que tenemos disponible y que podría interesarte. ¿Me permites un momento?'
                         };
 
                         await ariManager.playAudio(bridgeId, commonAudio);
                         openaiVoice.addToConversationHistory(conversationId, 'user', transcription.text);
                         openaiVoice.addToConversationHistory(conversationId, 'assistant', responseTexts[detectedCommon] || '');
 
-                        // Si es despedida, terminar
-                        if (detectedCommon === 'despedida_negativa') {
-                            console.log('👋 Despedida detectada');
-                            break;
-                        }
+                        // NO cortar la llamada aquí - dejar que fluya naturalmente
+                        // La llamada solo termina cuando el cliente cuelga
 
                         turnCount++;
                         continue;
@@ -724,15 +941,9 @@ class CampaignManager extends EventEmitter {
                 // ===== HABLAR AL CLIENTE (TTS + REPRODUCIR) =====
                 await this.speakToClient(bridgeId, aiResponse.text, callId, turnCount++, 'bot', conversationId, aiResponse.text);
 
-                // Verificar si es despedida
-                const lowerResponse = aiResponse.text.toLowerCase();
-                if (lowerResponse.includes('gracias por tu tiempo') ||
-                    lowerResponse.includes('que tengas buen día') ||
-                    lowerResponse.includes('hasta luego') ||
-                    lowerResponse.includes('adiós')) {
-                    console.log('👋 Despedida detectada, finalizando conversación');
-                    break;
-                }
+                // NO detectar despedida aquí - dejar que la conversación fluya
+                // La llamada termina cuando el cliente cuelga
+                // La intención se analiza AL FINAL de la llamada
             }
 
             // ===== ANÁLISIS POST-CONVERSACIÓN (SIEMPRE SE EJECUTA) =====
@@ -794,14 +1005,17 @@ class CampaignManager extends EventEmitter {
             console.log(`✅ Bot habló (${processingTime}ms)`);
 
         } catch (error) {
-            console.error('❌ Error hablando al cliente:', error);
-
-            // Fallback: usar audio de demo de Asterisk
-            console.log('⚠️  Usando audio de fallback');
-            try {
-                await ariManager.playAudio(bridgeId, 'demo-congrats');
-            } catch (fallbackError) {
-                console.error('❌ Error incluso con fallback:', fallbackError);
+            // No mostrar error si el usuario ya colgó
+            if (error.message?.includes('not found') || error.message?.includes('not in Stasis')) {
+                console.log(`📴 No se pudo hablar - usuario ya colgó`);
+            } else {
+                console.error('❌ Error hablando al cliente:', error.message);
+                // Fallback: intentar audio de demo
+                try {
+                    await ariManager.playAudio(bridgeId, 'demo-congrats');
+                } catch (fallbackError) {
+                    // Ignorar - probablemente el usuario colgó
+                }
             }
         }
     }
@@ -843,19 +1057,16 @@ class CampaignManager extends EventEmitter {
             console.log(`   - Respuesta cliente: ${analysis.clientResponse}`);
             console.log(`   - Notas: ${analysis.notes}`);
 
-            // Crear cita si se detectó interés o acuerdo
+            // Solo crear cita si hay interés ALTO con fecha y hora confirmadas
             const shouldCreateAppointment =
-                analysis.wantsAppointment ||
-                analysis.agreement ||
-                (analysis.interest && analysis.interestLevel === 'high') ||
-                (analysis.appointmentDate && analysis.appointmentTime);
+                analysis.interestLevel === 'high' &&
+                analysis.agreement &&
+                analysis.appointmentDate &&
+                analysis.appointmentTime;
 
             if (shouldCreateAppointment) {
-                // Construir datetime si tenemos fecha y hora
-                let appointmentDatetime = null;
-                if (analysis.appointmentDate && analysis.appointmentTime) {
-                    appointmentDatetime = `${analysis.appointmentDate} ${analysis.appointmentTime}:00`;
-                }
+                // Construir datetime con fecha y hora
+                const appointmentDatetime = `${analysis.appointmentDate} ${analysis.appointmentTime}:00`;
 
                 const appointmentData = {
                     callId: callId,
@@ -866,9 +1077,9 @@ class CampaignManager extends EventEmitter {
                     date: analysis.appointmentDate,
                     time: analysis.appointmentTime,
                     datetime: appointmentDatetime,
-                    notes: `${analysis.notes || ''} | Cliente: ${analysis.clientResponse} | Raw: fecha="${analysis.rawDateMentioned}", hora="${analysis.rawTimeMentioned}"`,
-                    interestLevel: analysis.interestLevel || 'medium',
-                    agreementReached: analysis.agreement || false
+                    notes: `${analysis.notes || ''} | Cliente: ${analysis.clientResponse}`,
+                    interestLevel: 'high',
+                    agreementReached: true
                 };
 
                 console.log('📅 CREANDO CITA en base de datos...');
@@ -881,8 +1092,8 @@ class CampaignManager extends EventEmitter {
                 // Actualizar estadísticas de campaña
                 await voicebotDB.updateCampaignStats(contact.campaign_id);
             } else {
-                console.log('ℹ️ No se detectó cita para agendar');
-                console.log(`   Razón: interest=${analysis.interest}, wantsAppointment=${analysis.wantsAppointment}, agreement=${analysis.agreement}`);
+                console.log('ℹ️ No se creó cita - Se requiere: interés alto + acuerdo + fecha + hora');
+                console.log(`   Resultado: interés=${analysis.interestLevel}, acuerdo=${analysis.agreement}, fecha=${analysis.appointmentDate || 'sin fecha'}, hora=${analysis.appointmentTime || 'sin hora'}`);
             }
 
         } catch (error) {
@@ -976,7 +1187,7 @@ class CampaignManager extends EventEmitter {
         return numStr || null;
     }
 
-    // Construir el texto del pitch de la nave
+    // Construir el texto del pitch de la nave (tono consultivo)
     buildNavePitch(contact) {
         // Debug: mostrar datos del contacto
         console.log(`🏭 buildNavePitch - Datos del contacto:`);
@@ -985,7 +1196,7 @@ class CampaignManager extends EventEmitter {
         console.log(`   nave_size: "${contact.nave_size}" (tipo: ${typeof contact.nave_size})`);
         console.log(`   nave_price: "${contact.nave_price}" (tipo: ${typeof contact.nave_price})`);
 
-        let pitch = 'Tenemos una nave ';
+        let pitch = 'Te comento, tenemos disponible una nave ';
 
         // Tipo de nave
         if (contact.nave_type) {
@@ -996,21 +1207,23 @@ class CampaignManager extends EventEmitter {
 
         // Ubicación
         if (contact.nave_location) {
-            pitch += `en ${contact.nave_location}, `;
+            pitch += `ubicada en ${contact.nave_location}. `;
         }
 
         // Tamaño (formateado)
         const sizeText = this.formatSizeToText(contact.nave_size);
         console.log(`   sizeText formateado: "${sizeText}"`);
         if (sizeText) {
-            pitch += `de ${sizeText} metros cuadrados, `;
+            pitch += `Cuenta con ${sizeText} metros cuadrados`;
         }
 
         // Precio (formateado)
         const priceText = this.formatPriceToText(contact.nave_price);
         console.log(`   priceText formateado: "${priceText}"`);
         if (priceText) {
-            pitch += `con precio de ${priceText} de pesos. `;
+            pitch += ` y está en ${priceText} de pesos. `;
+        } else {
+            pitch += '. ';
         }
 
         // Ventajas
@@ -1018,7 +1231,7 @@ class CampaignManager extends EventEmitter {
             pitch += `${contact.strategic_advantages}. `;
         }
 
-        pitch += '¿Te gustaría agendar una visita para conocerla?';
+        pitch += '¿Te interesaría agendar una visita para conocerla?';
 
         console.log(`🏭 buildNavePitch - Pitch final: "${pitch}"`);
         return pitch;
@@ -1068,7 +1281,7 @@ class CampaignManager extends EventEmitter {
     getStatus() {
         return {
             activeCallsCount: this.activeCallsCount,
-            maxConcurrentCalls: this.maxConcurrentCalls,
+            maxConcurrentCalls: this.currentCampaignMaxCalls,
             activeCampaigns: this.activeCampaigns.size,
             callHandlers: this.callHandlers.size
         };

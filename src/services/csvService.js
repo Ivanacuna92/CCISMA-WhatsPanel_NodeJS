@@ -15,7 +15,6 @@ class CSVService {
       'Ancho',
       'Largo',
       'Area (m2)',
-      'Precio',
       'Estado',
       'Información Extra',
       'Ventajas Estratégicas'
@@ -76,9 +75,6 @@ class CSVService {
         }
         if (record['Area (m2)'] && isNaN(parseFloat(record['Area (m2)']))) {
           throw new Error(`Fila ${index + 2}: El campo 'Area (m2)' debe ser un número`);
-        }
-        if (record['Precio'] && isNaN(parseFloat(record['Precio']))) {
-          throw new Error(`Fila ${index + 2}: El campo 'Precio' debe ser un número`);
         }
       });
 
@@ -253,23 +249,6 @@ class CSVService {
     }
     if (record['Ancho'] && record['Largo']) {
       formatted.push(`📏 Dimensiones: ${record['Ancho']}m x ${record['Largo']}m`);
-    }
-    if (record['Precio']) {
-      // Preservar el precio exacto del CSV sin redondeo
-      const precioString = String(record['Precio']).replace(/,/g, '');
-      const precio = parseFloat(precioString);
-
-      // Determinar si el precio tiene decimales
-      const tieneDecimales = precioString.includes('.');
-      const decimales = tieneDecimales ? (precioString.split('.')[1] || '').length : 0;
-
-      const precioFormateado = precio.toLocaleString('es-MX', {
-        style: 'currency',
-        currency: 'MXN',
-        minimumFractionDigits: decimales,
-        maximumFractionDigits: decimales
-      });
-      formatted.push(`💰 Precio: ${precioFormateado}`);
     }
     if (record['Estado']) {
       const emoji = record['Estado'].toLowerCase() === 'disponible' ? '✅' :

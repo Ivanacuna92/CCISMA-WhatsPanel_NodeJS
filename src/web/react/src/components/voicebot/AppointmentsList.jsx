@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, User, Phone, MapPin, TrendingUp, CheckCircle, XCircle, Clock, RefreshCw, Edit, Trash2 } from 'lucide-react';
+import { Calendar, User, Phone, MapPin, CheckCircle, XCircle, Clock, RefreshCw, Edit, Trash2 } from 'lucide-react';
 import voicebotApi from '../../services/voicebotApi';
 
 function AppointmentsList() {
     const [appointments, setAppointments] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [filter, setFilter] = useState('all'); // all, high, medium, low
+    const [filter, setFilter] = useState('all'); // all, high
     const [campaigns, setCampaigns] = useState([]);
     const [selectedCampaign, setSelectedCampaign] = useState('all');
     const [editingId, setEditingId] = useState(null);
@@ -47,23 +47,8 @@ function AppointmentsList() {
         }
     };
 
-    const getInterestColor = (level) => {
-        switch (level) {
-            case 'high': return 'text-green-600 bg-green-100';
-            case 'medium': return 'text-yellow-600 bg-yellow-100';
-            case 'low': return 'text-gray-600 bg-gray-100';
-            default: return 'text-gray-600 bg-gray-100';
-        }
-    };
-
-    const getInterestLabel = (level) => {
-        switch (level) {
-            case 'high': return 'Alto Interés';
-            case 'medium': return 'Interés Medio';
-            case 'low': return 'Interés Bajo';
-            default: return 'Sin Definir';
-        }
-    };
+    const getInterestColor = () => 'text-green-600 bg-green-100';
+    const getInterestLabel = () => 'Cita Confirmada';
 
     const formatDate = (dateString) => {
         if (!dateString) return 'Por confirmar';
@@ -136,10 +121,7 @@ function AppointmentsList() {
 
     const stats = {
         total: appointments.length,
-        high: appointments.filter(a => a.interest_level === 'high').length,
-        medium: appointments.filter(a => a.interest_level === 'medium').length,
-        low: appointments.filter(a => a.interest_level === 'low').length,
-        agreements: appointments.filter(a => a.agreement_reached).length
+        confirmed: appointments.filter(a => a.agreement_reached).length
     };
 
     if (loading && appointments.length === 0) {
@@ -171,7 +153,7 @@ function AppointmentsList() {
                 </div>
 
                 {/* Stats Grid */}
-                <div className="grid grid-cols-5 gap-4 mb-6">
+                <div className="grid grid-cols-2 gap-4 mb-6">
                     <div className="bg-blue-50 rounded-lg p-4">
                         <div className="flex items-center justify-between">
                             <Calendar className="h-8 w-8 text-blue-600" />
@@ -183,37 +165,10 @@ function AppointmentsList() {
                     </div>
                     <div className="bg-green-50 rounded-lg p-4">
                         <div className="flex items-center justify-between">
-                            <TrendingUp className="h-8 w-8 text-green-600" />
+                            <CheckCircle className="h-8 w-8 text-green-600" />
                             <div className="text-right">
-                                <div className="text-2xl font-bold text-green-600">{stats.high}</div>
-                                <div className="text-xs text-green-600">Alto Interés</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="bg-yellow-50 rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                            <TrendingUp className="h-8 w-8 text-yellow-600" />
-                            <div className="text-right">
-                                <div className="text-2xl font-bold text-yellow-600">{stats.medium}</div>
-                                <div className="text-xs text-yellow-600">Interés Medio</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="bg-gray-50 rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                            <TrendingUp className="h-8 w-8 text-gray-600" />
-                            <div className="text-right">
-                                <div className="text-2xl font-bold text-gray-600">{stats.low}</div>
-                                <div className="text-xs text-gray-600">Interés Bajo</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div className="bg-purple-50 rounded-lg p-4">
-                        <div className="flex items-center justify-between">
-                            <CheckCircle className="h-8 w-8 text-purple-600" />
-                            <div className="text-right">
-                                <div className="text-2xl font-bold text-purple-600">{stats.agreements}</div>
-                                <div className="text-xs text-purple-600">Acuerdos</div>
+                                <div className="text-2xl font-bold text-green-600">{stats.confirmed}</div>
+                                <div className="text-xs text-green-600">Confirmadas</div>
                             </div>
                         </div>
                     </div>
@@ -235,49 +190,6 @@ function AppointmentsList() {
                         ))}
                     </select>
 
-                    {/* Filtro por interés */}
-                    <div className="flex space-x-2">
-                        <button
-                            onClick={() => setFilter('all')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                filter === 'all'
-                                    ? 'bg-navetec-primary text-white'
-                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
-                        >
-                            Todas ({stats.total})
-                        </button>
-                        <button
-                            onClick={() => setFilter('high')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                filter === 'high'
-                                    ? 'bg-green-600 text-white'
-                                    : 'bg-green-100 text-green-600 hover:bg-green-200'
-                            }`}
-                        >
-                            Alto ({stats.high})
-                        </button>
-                        <button
-                            onClick={() => setFilter('medium')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                filter === 'medium'
-                                    ? 'bg-yellow-600 text-white'
-                                    : 'bg-yellow-100 text-yellow-600 hover:bg-yellow-200'
-                            }`}
-                        >
-                            Medio ({stats.medium})
-                        </button>
-                        <button
-                            onClick={() => setFilter('low')}
-                            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                                filter === 'low'
-                                    ? 'bg-gray-600 text-white'
-                                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
-                        >
-                            Bajo ({stats.low})
-                        </button>
-                    </div>
                 </div>
             </div>
 
@@ -392,15 +304,10 @@ function AppointmentsList() {
                                             <h3 className="text-lg font-semibold text-gray-900">
                                                 {appointment.client_name}
                                             </h3>
-                                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${getInterestColor(appointment.interest_level)}`}>
-                                                {getInterestLabel(appointment.interest_level)}
+                                            <span className={`px-3 py-1 rounded-full text-xs font-medium ${getInterestColor()} flex items-center space-x-1`}>
+                                                <CheckCircle className="h-3 w-3" />
+                                                <span>{getInterestLabel()}</span>
                                             </span>
-                                            {appointment.agreement_reached && (
-                                                <span className="px-3 py-1 rounded-full text-xs font-medium text-green-600 bg-green-100 flex items-center space-x-1">
-                                                    <CheckCircle className="h-3 w-3" />
-                                                    <span>Acuerdo Alcanzado</span>
-                                                </span>
-                                            )}
                                         </div>
 
                                         <div className="grid grid-cols-2 gap-4 mb-3">

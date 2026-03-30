@@ -142,7 +142,7 @@ function NavesUpload() {
         </label>
         
         <p className="text-xs text-gray-500 mt-4">
-          Formato requerido: Parque Industrial, Ubicación, Tipo, Ancho, Largo, Area (m2), Precio, Estado, Información Extra, Ventajas Estratégicas
+          Formato requerido: Parque Industrial, Ubicación, Tipo, Ancho, Largo, Area (m2), Estado, Información Extra, Ventajas Estratégicas
         </p>
         
         <div className="mt-4">

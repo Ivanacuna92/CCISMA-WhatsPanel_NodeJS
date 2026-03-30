@@ -9,7 +9,7 @@ const salesManager = require('../services/salesManager');
 const conversationAnalyzer = require('../services/conversationAnalyzer');
 const authService = require('../services/authService');
 const csvService = require('../services/csvService');
-const imageService = require('../services/imageService');
+const mediaService = require('../services/mediaService');
 const userDataManager = require('../services/userDataManager');
 const { requireAuth, requireAdmin, requireSupportOrAdmin } = require('../middleware/auth');
 const ViteExpress = require('vite-express');
@@ -909,9 +909,9 @@ class WebServer {
         // Descargar plantilla CSV
         this.app.get('/api/csv/template', (req, res) => {
             try {
-                const templateContent = `Parque Industrial,Ubicación,Tipo,Ancho,Largo,Area (m2),Precio,Estado,Información Extra,Ventajas Estratégicas
-Vernes,Carr. México - Qro,Nave Industrial,50,30,1500,750000,Disponible,Incluye oficinas administrativas,Acceso directo a autopistas principales
-LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con muelle de carga,Zona de alto flujo comercial`;
+                const templateContent = `Parque Industrial,Ubicación,Tipo,Ancho,Largo,Area (m2),Estado,Información Extra,Ventajas Estratégicas
+Vernes,Carr. México - Qro,Nave Industrial,50,30,1500,Disponible,Incluye oficinas administrativas,Acceso directo a autopistas principales
+LuisOnorio,Av. Constituyentes,Micronave,25,20,500,Pre-Venta,Cuenta con muelle de carga,Zona de alto flujo comercial`;
 
                 res.setHeader('Content-Type', 'text/csv');
                 res.setHeader('Content-Disposition', 'attachment; filename="plantilla_naves.csv"');
@@ -938,31 +938,37 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
             }
         });
 
-        // ===== ENDPOINTS DE GALERIA DE IMAGENES (SOLO ADMIN) =====
+        // ===== ENDPOINTS DE GALERIA DE MEDIOS (SOLO ADMIN) =====
 
-        const imageUpload = multer({
-            limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+        const mediaUpload = multer({
+            limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
             fileFilter: (req, file, cb) => {
-                const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+                const allowedMimes = [
+                    'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+                    'video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo',
+                    'application/pdf',
+                    'application/msword',
+                    'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                ];
                 if (allowedMimes.includes(file.mimetype)) {
                     cb(null, true);
                 } else {
-                    cb(new Error('Solo se permiten archivos de imagen (JPEG, PNG, GIF, WEBP)'));
+                    cb(new Error('Tipo de archivo no permitido. Se aceptan: imagenes (JPEG, PNG, GIF, WEBP), videos (MP4, WEBM, MOV, AVI), documentos (PDF, DOC, DOCX)'));
                 }
             }
         });
 
-        // Subir imagen con metadata
-        this.app.post('/api/images/upload', requireAdmin, imageUpload.single('image'), async (req, res) => {
+        // Subir medio con metadata
+        this.app.post('/api/media/upload', requireAdmin, mediaUpload.single('media'), async (req, res) => {
             try {
                 if (!req.file) {
-                    return res.status(400).json({ error: 'No se proporcionó imagen' });
+                    return res.status(400).json({ error: 'No se proporcionó archivo' });
                 }
                 const { title, category, description, tags } = req.body;
                 if (!title || !category) {
                     return res.status(400).json({ error: 'Titulo y categoria son requeridos' });
                 }
-                const result = await imageService.saveImage(req.file, {
+                const result = await mediaService.saveMedia(req.file, {
                     title,
                     category,
                     description: description || '',
@@ -971,62 +977,138 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
                 });
                 res.json(result);
             } catch (error) {
-                console.error('Error subiendo imagen:', error);
+                console.error('Error subiendo medio:', error);
                 res.status(500).json({ error: error.message });
             }
         });
 
-        // Listar imágenes (con filtro opcional por categoría)
+        // Backward compat: ruta antigua de subida
+        this.app.post('/api/images/upload', requireAdmin, mediaUpload.single('image'), async (req, res) => {
+            try {
+                if (!req.file) {
+                    return res.status(400).json({ error: 'No se proporcionó archivo' });
+                }
+                const { title, category, description, tags } = req.body;
+                if (!title || !category) {
+                    return res.status(400).json({ error: 'Titulo y categoria son requeridos' });
+                }
+                const result = await mediaService.saveMedia(req.file, {
+                    title,
+                    category,
+                    description: description || '',
+                    tags: tags || '',
+                    uploadedBy: req.user?.id || null
+                });
+                res.json(result);
+            } catch (error) {
+                console.error('Error subiendo medio:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Listar medios (con filtro opcional por categoria y tipo)
+        this.app.get('/api/media', requireAdmin, async (req, res) => {
+            try {
+                const { category, mediaType } = req.query;
+                let items;
+                if (category) {
+                    items = await mediaService.getByCategory(category);
+                } else {
+                    items = await mediaService.getAll(mediaType || null);
+                }
+                res.json({ images: items });
+            } catch (error) {
+                console.error('Error listando medios:', error);
+                res.status(500).json({ error: 'Error obteniendo medios' });
+            }
+        });
+
+        // Backward compat
         this.app.get('/api/images', requireAdmin, async (req, res) => {
             try {
                 const { category } = req.query;
-                const images = category
-                    ? await imageService.getByCategory(category)
-                    : await imageService.getAll();
-                res.json({ images });
+                const items = category
+                    ? await mediaService.getByCategory(category)
+                    : await mediaService.getAll();
+                res.json({ images: items });
             } catch (error) {
-                console.error('Error listando imágenes:', error);
-                res.status(500).json({ error: 'Error obteniendo imágenes' });
+                res.status(500).json({ error: 'Error obteniendo medios' });
             }
         });
 
-        // Obtener detalle de una imagen
-        this.app.get('/api/images/:id', requireAdmin, async (req, res) => {
+        // Obtener detalle de un medio
+        this.app.get('/api/media/:id', requireAdmin, async (req, res) => {
             try {
-                const image = await imageService.getById(req.params.id);
-                if (!image) {
-                    return res.status(404).json({ error: 'Imagen no encontrada' });
+                const media = await mediaService.getById(req.params.id);
+                if (!media) {
+                    return res.status(404).json({ error: 'Medio no encontrado' });
                 }
-                res.json(image);
+                res.json(media);
             } catch (error) {
-                console.error('Error obteniendo imagen:', error);
+                console.error('Error obteniendo medio:', error);
                 res.status(500).json({ error: error.message });
             }
         });
 
-        // Eliminar imagen
-        this.app.delete('/api/images/:id', requireAdmin, async (req, res) => {
+        // Eliminar medio
+        this.app.delete('/api/media/:id', requireAdmin, async (req, res) => {
             try {
-                const result = await imageService.delete(req.params.id);
+                const result = await mediaService.delete(req.params.id);
                 res.json(result);
             } catch (error) {
-                console.error('Error eliminando imagen:', error);
+                console.error('Error eliminando medio:', error);
                 res.status(500).json({ error: error.message });
             }
         });
 
-        // Servir archivo de imagen (para thumbnails en el panel)
-        this.app.get('/api/images/:id/file', requireAuth, async (req, res) => {
+        // Servir archivo de medio
+        this.app.get('/api/media/:id/file', requireAuth, async (req, res) => {
             try {
-                const image = await imageService.getById(req.params.id);
-                if (!image) {
-                    return res.status(404).json({ error: 'Imagen no encontrada' });
+                const media = await mediaService.getById(req.params.id);
+                if (!media) {
+                    return res.status(404).json({ error: 'Medio no encontrado' });
                 }
-                const filePath = path.join(process.cwd(), image.file_path);
-                res.setHeader('Content-Type', image.mime_type);
+                const filePath = path.join(process.cwd(), media.file_path);
+                res.setHeader('Content-Type', media.mime_type);
                 res.sendFile(filePath);
             } catch (error) {
-                console.error('Error sirviendo imagen:', error);
+                console.error('Error sirviendo medio:', error);
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        // Backward compat: rutas antiguas
+        this.app.get('/api/images/:id', requireAdmin, async (req, res) => {
+            try {
+                const media = await mediaService.getById(req.params.id);
+                if (!media) {
+                    return res.status(404).json({ error: 'Medio no encontrado' });
+                }
+                res.json(media);
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        this.app.delete('/api/images/:id', requireAdmin, async (req, res) => {
+            try {
+                const result = await mediaService.delete(req.params.id);
+                res.json(result);
+            } catch (error) {
+                res.status(500).json({ error: error.message });
+            }
+        });
+
+        this.app.get('/api/images/:id/file', requireAuth, async (req, res) => {
+            try {
+                const media = await mediaService.getById(req.params.id);
+                if (!media) {
+                    return res.status(404).json({ error: 'Medio no encontrado' });
+                }
+                const filePath = path.join(process.cwd(), media.file_path);
+                res.setHeader('Content-Type', media.mime_type);
+                res.sendFile(filePath);
+            } catch (error) {
                 res.status(500).json({ error: error.message });
             }
         });
@@ -1558,17 +1640,25 @@ LuisOnorio,Av. Constituyentes,Micronave,25,20,500,350000,Pre-Venta,Cuenta con mu
                 // Enviar mensaje de finalización
                 const endMessage = '⏰ Tu sesión de conversación ha finalizado. Puedes escribirme nuevamente para iniciar una nueva conversación.';
                 await global.whatsappBot.sock.sendMessage(formattedPhone, { text: endMessage });
-                
+
                 // Registrar el mensaje de finalización en los logs como mensaje del BOT
                 logger.log('BOT', endMessage, phone);
-                
-                // Limpiar la sesión
+
+                // Detener seguimiento si está activo
+                const followUpManager = require('../services/followUpManager');
+                if (await followUpManager.isFollowUpActive(phone)) {
+                    await followUpManager.stopFollowUp(phone, 'manual');
+                }
+
+                // Limpiar la sesión y datos del usuario
                 const sessionManager = require('../services/sessionManager');
-                sessionManager.clearSession(phone);
-                
+                const userDataManager = require('../services/userDataManager');
+                await sessionManager.clearSession(phone);
+                await userDataManager.deleteUserData(phone);
+
                 // Cambiar a modo IA si estaba en modo humano
                 humanModeManager.setMode(phone, false);
-                
+
                 // Registrar el evento
                 logger.log('SYSTEM', `Conversación finalizada manualmente para ${phone}`, phone);
                 

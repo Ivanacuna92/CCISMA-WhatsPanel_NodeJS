@@ -111,6 +111,52 @@ class DatabaseInit {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             `);
 
+            // Crear tabla de galería de medios (imágenes, videos, documentos)
+            await database.query(`
+                CREATE TABLE IF NOT EXISTS gallery_images (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    title VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    category VARCHAR(50) NOT NULL,
+                    tags VARCHAR(500),
+                    file_path VARCHAR(500) NOT NULL,
+                    mime_type VARCHAR(100) NOT NULL,
+                    file_size INT,
+                    original_filename VARCHAR(255),
+                    media_type ENUM('image', 'video', 'document') DEFAULT 'image',
+                    uploaded_by INT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_category (category),
+                    INDEX idx_media_type (media_type)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            `);
+
+            // Agregar columna media_type si no existe (para instalaciones existentes)
+            try {
+                await database.query(`
+                    ALTER TABLE gallery_images
+                    ADD COLUMN IF NOT EXISTS media_type ENUM('image', 'video', 'document') DEFAULT 'image' AFTER original_filename
+                `);
+            } catch (error) {
+                if (!error.message.includes('Duplicate column')) {
+                    console.log('Nota: media_type ya existe en gallery_images o error al agregar:', error.message);
+                }
+            }
+
+            // Crear tabla de contactos permanentes (memoria de usuarios)
+            await database.query(`
+                CREATE TABLE IF NOT EXISTS contacts (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    phone VARCHAR(50) UNIQUE NOT NULL,
+                    name VARCHAR(255) NULL,
+                    email VARCHAR(255) NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    INDEX idx_phone (phone)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+            `);
+
             // Insertar usuario admin por defecto si no existe
             const adminExists = await database.findOne('support_users', 'email = ?', ['admin@whatspanel.com']);
             if (!adminExists) {

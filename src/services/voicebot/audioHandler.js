@@ -133,7 +133,8 @@ class AudioHandler {
     async convertForAsteriskPlayback(inputPath) {
         const wavPath = inputPath.replace(/\.(wav|mp3)$/, '_ast.wav');
         try {
-            await execAsync(`sox "${inputPath}" -r 8000 -c 1 "${wavPath}"`);
+            // 8kHz con resampling de alta calidad y shaped dither
+            await execAsync(`sox "${inputPath}" -r 8000 -c 1 "${wavPath}" rate -v -L dither -s`);
             return wavPath;
         } catch (error) {
             console.error('❌ Error convirtiendo:', error.message);
@@ -144,21 +145,31 @@ class AudioHandler {
     /**
      * Convierte audio TTS directo al destino (sin archivo intermedio)
      * Optimizado para menor latencia
-     * Soporta PCM raw (24kHz 16-bit mono) y MP3
+     * Soporta PCM raw (24kHz 16-bit mono de OpenAI) y MP3 (Eleven Labs u otros)
      */
     async convertForAsteriskPlaybackDirect(inputPath, outputPath) {
         try {
-            // Detectar si es PCM raw (de OpenAI TTS con response_format: 'pcm')
+            // Detectar formato por extensión
             const isPCM = inputPath.endsWith('.pcm');
+            const isMP3 = inputPath.endsWith('.mp3');
 
             if (isPCM) {
                 // PCM de OpenAI: 24kHz, 16-bit signed little-endian, mono
-                // Convertir directo a WAV 8kHz para Asterisk (mejor calidad que MP3→WAV)
-                await execAsync(`sox -t raw -r 24000 -b 16 -c 1 -e signed-integer -L "${inputPath}" -r 8000 "${outputPath}"`);
-                console.log(`✅ PCM→WAV convertido: ${outputPath}`);
+                // Convertir a WAV 8kHz para Asterisk (G.711)
+                // rate -v -L = very high quality resampling con linear phase
+                // dither -s = shaped dither para mejor calidad percibida a baja resolución
+                await execAsync(`sox -t raw -r 24000 -b 16 -c 1 -e signed-integer -L "${inputPath}" -r 8000 "${outputPath}" rate -v -L dither -s`);
+                console.log(`✅ PCM→WAV 8kHz HQ convertido: ${outputPath}`);
+            } else if (isMP3) {
+                // MP3 de Eleven Labs (44.1kHz típicamente)
+                // Convertir a WAV 8kHz mono para Asterisk
+                // rate -v -L = very high quality resampling
+                await execAsync(`sox "${inputPath}" -r 8000 -c 1 -b 16 "${outputPath}" rate -v -L dither -s`);
+                console.log(`✅ MP3 (Eleven Labs)→WAV 8kHz convertido: ${outputPath}`);
             } else {
-                // MP3 u otro formato: conversión estándar
-                await execAsync(`sox "${inputPath}" -r 8000 -c 1 -b 16 "${outputPath}" rate -v 8000`);
+                // WAV u otro formato: conversión a 8kHz con mejor calidad
+                await execAsync(`sox "${inputPath}" -r 8000 -c 1 -b 16 "${outputPath}" rate -v -L dither -s`);
+                console.log(`✅ Audio→WAV 8kHz convertido: ${outputPath}`);
             }
             return outputPath;
         } catch (error) {

@@ -115,21 +115,16 @@ class SessionManager {
     }
 
     async clearSession(userId) {
-        // Limpiar cache local
-        if (this.localCache.has(userId)) {
-            this.localCache.get(userId).messages = [];
-        }
-        
-        // Limpiar en base de datos
+        // Eliminar del cache local completamente
+        this.localCache.delete(userId);
+
+        // Eliminar de base de datos
         try {
-            await database.update('user_sessions',
-                {
-                    messages: '[]',
-                    last_activity: new Date()
-                },
-                'user_id = ?',
+            await database.query(
+                'DELETE FROM user_sessions WHERE user_id = ?',
                 [userId]
             );
+            console.log(`[SessionManager] 🧹 Sesión eliminada completamente para ${userId}`);
         } catch (error) {
             console.error('Error limpiando sesión en BD:', error);
         }

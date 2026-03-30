@@ -6,7 +6,7 @@ import Reports from './components/Reports';
 import NavesUpload from './components/NavesUpload';
 import VoicebotPanel from './components/VoicebotPanel';
 import CDRReports from './components/CDRReports';
-import ImageGallery from './components/ImageGallery';
+import MediaGallery from './components/MediaGallery';
 import Header from './components/Header';
 import Login from './components/Login';
 import { checkAuth, logout } from './services/api';
@@ -138,7 +138,7 @@ function App() {
       ) : currentView === 'naves' ? (
         <NavesUpload />
       ) : currentView === 'gallery' && user?.role === 'admin' ? (
-        <ImageGallery />
+        <MediaGallery />
       ) : currentView === 'voicebot' && user?.role === 'admin' ? (
         <VoicebotPanel />
       ) : currentView === 'cdr' && user?.role === 'admin' ? (

@@ -17,7 +17,8 @@ const conversationAnalyzer = require("../services/conversationAnalyzer");
 const userDataManager = require("../services/userDataManager");
 const followUpManager = require("../services/followUpManager");
 const database = require("../services/database");
-const imageService = require("../services/imageService");
+const mediaService = require("../services/mediaService");
+const contactsService = require("../services/contactsService");
 
 class WhatsAppBot {
   constructor() {
@@ -323,13 +324,13 @@ class WhatsAppBot {
 
             await logger.log("bot", response, userId, userName);
 
-            // Enviar imágenes pendientes si las hay
-            if (this._pendingImages && this._pendingImages.chatId === from) {
-              const pendingIds = this._pendingImages.imageIds;
-              this._pendingImages = null;
-              console.log(`[Images] Enviando ${pendingIds.length} imagen(es) a ${userId}`);
-              await this.sendImages(from, pendingIds);
-              await logger.log("SYSTEM", `Imagenes enviadas: IDs ${pendingIds.join(',')}`, userId);
+            // Enviar medios pendientes si los hay
+            if (this._pendingMedia && this._pendingMedia.chatId === from) {
+              const pendingIds = this._pendingMedia.mediaIds;
+              this._pendingMedia = null;
+              console.log(`[Media] Enviando ${pendingIds.length} medio(s) a ${userId}`);
+              await this.sendMedia(from, pendingIds);
+              await logger.log("SYSTEM", `Medios enviados: IDs ${pendingIds.join(',')}`, userId);
             }
           } catch (sendError) {
             console.error(`[WhatsApp] ❌ Error enviando mensaje a ${userId}:`, sendError);
@@ -390,22 +391,38 @@ class WhatsAppBot {
       return await this.handleEmailCollection(userId, userMessage, chatId);
     }
 
-    // Si es usuario nuevo, dar bienvenida y pedir nombre (pero no bloquear)
+    // Si es usuario nuevo, checar si ya lo conocemos en la tabla de contactos
     if (dataCollectionState === "none") {
-      await userDataManager.setUserData(userId, {});
+      const knownContact = await contactsService.getByPhone(userId);
 
-      // Agregar el mensaje del usuario primero
-      await sessionManager.addMessage(userId, "user", userMessage, chatId);
+      if (knownContact && knownContact.name) {
+        // Ya lo conocemos, restaurar sus datos en userDataManager
+        console.log(`[Bot] Contacto conocido detectado: ${knownContact.name} (${userId})`);
+        await userDataManager.setUserData(userId, {
+          name: knownContact.name,
+          email: knownContact.email || undefined,
+          nameCollected: true,
+          dataCollected: !!(knownContact.name && knownContact.email),
+        });
 
-      // Dar bienvenida y pedir nombre de forma educada
-      const welcomeMessage = `¡Hola! Soy Daniel, asistente virtual de Navetec.\n\n¿Con quién tengo el gusto?\n\n_Por favor, proporciona tu nombre completo`;
-      await sessionManager.addMessage(
-        userId,
-        "assistant",
-        welcomeMessage,
-        chatId
-      );
-      return welcomeMessage;
+        // Continuar con el flujo normal (no pedir nombre)
+      } else {
+        // Usuario realmente nuevo
+        await userDataManager.setUserData(userId, {});
+
+        // Agregar el mensaje del usuario primero
+        await sessionManager.addMessage(userId, "user", userMessage, chatId);
+
+        // Dar bienvenida y pedir nombre de forma educada
+        const welcomeMessage = `¡Hola! Soy Daniel, asistente virtual de Navetec.\n\n¿Con quién tengo el gusto?\n\n_Por favor, proporciona tu nombre completo`;
+        await sessionManager.addMessage(
+          userId,
+          "assistant",
+          welcomeMessage,
+          chatId
+        );
+        return welcomeMessage;
+      }
     }
 
     // Detectar si el usuario está proporcionando un email o nombre directamente
@@ -417,6 +434,9 @@ class WhatsAppBot {
       const email = trimmedMessage.toLowerCase();
       await userDataManager.setUserData(userId, { email: email });
       const userData = await userDataManager.getUserData(userId);
+
+      // Guardar en tabla de contactos permanente
+      await contactsService.saveEmail(userId, email);
 
       // Marcar datos como completos si tiene nombre y email
       if (userData.name) {
@@ -456,6 +476,9 @@ class WhatsAppBot {
         await userDataManager.setUserData(userId, { name: trimmedMessage });
         await userDataManager.markNameCollected(userId);
 
+        // Guardar en tabla de contactos permanente
+        await contactsService.saveName(userId, trimmedMessage);
+
         // Agregar mensaje del usuario a la sesión
         await sessionManager.addMessage(userId, "user", userMessage, chatId);
 
@@ -476,23 +499,23 @@ class WhatsAppBot {
     // Actualizar historial después de agregar el mensaje
     conversationHistory = await sessionManager.getMessages(userId, chatId);
 
-    // Analizar conversación y obtener asesor asignado
-    let asesorAsignado = null;
-    try {
-      const analysis = await conversationAnalyzer.analyzeConversation(
-        conversationHistory.map((msg) => ({
-          type: msg.role === "user" ? "USER" : "BOT",
-          message: msg.content,
-        })),
-        userId
-      );
-      asesorAsignado = analysis.asesor_asignado;
-      console.log(
-        `[Bot] Asesor asignado para ${userId}: ${asesorAsignado.nombre}`
-      );
-    } catch (error) {
-      console.error("[Bot] Error analizando conversación:", error);
-    }
+    // [SUSPENDIDO - Asesores de vacaciones por Semana Santa]
+    // let asesorAsignado = null;
+    // try {
+    //   const analysis = await conversationAnalyzer.analyzeConversation(
+    //     conversationHistory.map((msg) => ({
+    //       type: msg.role === "user" ? "USER" : "BOT",
+    //       message: msg.content,
+    //     })),
+    //     userId
+    //   );
+    //   asesorAsignado = analysis.asesor_asignado;
+    //   console.log(
+    //     `[Bot] Asesor asignado para ${userId}: ${asesorAsignado.nombre}`
+    //   );
+    // } catch (error) {
+    //   console.error("[Bot] Error analizando conversación:", error);
+    // }
 
     // Obtener datos del usuario para contexto
     const userData = await userDataManager.getUserData(userId);
@@ -559,15 +582,14 @@ class WhatsAppBot {
       await humanModeManager.setMode(userId, "support");
       await sessionManager.updateSessionMode(userId, chatId, "support");
 
-      // Incluir información del asesor asignado
       let finalResponse = cleanResponse;
-      if (asesorAsignado) {
-        finalResponse +=
-          `\n\n📋 *Asesor asignado:* ${asesorAsignado.nombre}\n` +
-          `_Especialidad: ${asesorAsignado.especialidades.join(", ")}_`;
-      }
+      // [SUSPENDIDO - Asesores de vacaciones por Semana Santa]
+      // if (asesorAsignado) {
+      //   finalResponse +=
+      //     `\n\n📋 *Asesor asignado:* ${asesorAsignado.nombre}\n` +
+      //     `_Especialidad: ${asesorAsignado.especialidades.join(", ")}_`;
+      // }
 
-      // Agregar respuesta con información del asesor
       await sessionManager.addMessage(
         userId,
         "assistant",
@@ -575,22 +597,18 @@ class WhatsAppBot {
         chatId
       );
 
-      // Registrar en logs con el asesor asignado
-      const logMessage = asesorAsignado
-        ? `Modo SOPORTE activado para ${userId} - Asesor: ${asesorAsignado.nombre}`
-        : `Modo SOPORTE activado automáticamente para ${userId}`;
-      await logger.log("SYSTEM", logMessage);
+      await logger.log("SYSTEM", `Modo SOPORTE activado para ${userId}`);
 
       return finalResponse;
     }
 
-    // Verificar si la respuesta contiene marcador de imágenes
-    const { cleanText: imageCleanText, imageIds } = this.parseImageMarkers(aiResponse);
-    if (imageIds.length > 0) {
-      await sessionManager.addMessage(userId, "assistant", imageCleanText, chatId);
-      // Guardar imágenes pendientes para enviar después del texto
-      this._pendingImages = { chatId, imageIds };
-      return imageCleanText;
+    // Verificar si la respuesta contiene marcador de medios
+    const { cleanText: mediaCleanText, mediaIds } = this.parseMediaMarkers(aiResponse);
+    if (mediaIds.length > 0) {
+      await sessionManager.addMessage(userId, "assistant", mediaCleanText, chatId);
+      // Guardar medios pendientes para enviar después del texto
+      this._pendingMedia = { chatId, mediaIds };
+      return mediaCleanText;
     }
 
     // Agregar respuesta de IA a la sesión
@@ -689,6 +707,9 @@ class WhatsAppBot {
     await userDataManager.markDataAsCollected(userId);
     const userData = await userDataManager.getUserData(userId);
 
+    // Guardar en tabla de contactos permanente
+    await contactsService.saveEmail(userId, email);
+
     // Verificar si había una activación de soporte pendiente
     if (await userDataManager.hasPendingSupportActivation(userId)) {
       // Limpiar el flag de soporte pendiente
@@ -698,40 +719,32 @@ class WhatsAppBot {
       await humanModeManager.setMode(userId, "support");
       await sessionManager.updateSessionMode(userId, chatId, "support");
 
-      // Obtener asesor asignado
-      const conversationHistory = await sessionManager.getMessages(
-        userId,
-        chatId
-      );
-      let asesorAsignado = null;
+      // [SUSPENDIDO - Asesores de vacaciones por Semana Santa]
+      // const conversationHistory = await sessionManager.getMessages(userId, chatId);
+      // let asesorAsignado = null;
+      // try {
+      //   const analysis = await conversationAnalyzer.analyzeConversation(
+      //     conversationHistory.map((msg) => ({
+      //       type: msg.role === "user" ? "USER" : "BOT",
+      //       message: msg.content,
+      //     })),
+      //     userId
+      //   );
+      //   asesorAsignado = analysis.asesor_asignado;
+      // } catch (error) {
+      //   console.error("[Bot] Error analizando conversación:", error);
+      // }
 
-      try {
-        const analysis = await conversationAnalyzer.analyzeConversation(
-          conversationHistory.map((msg) => ({
-            type: msg.role === "user" ? "USER" : "BOT",
-            message: msg.content,
-          })),
-          userId
-        );
-        asesorAsignado = analysis.asesor_asignado;
-      } catch (error) {
-        console.error("[Bot] Error analizando conversación:", error);
-      }
-
-      // Preparar respuesta con información del asesor
       let response = `¡Perfecto ${userData.name}! ✅\n\nHe registrado tu correo: ${email}\n\nTe estoy transfiriendo con uno de nuestros asesores especializados que te ayudará con tu caso.`;
 
-      if (asesorAsignado) {
-        response +=
-          `\n\n📋 *Asesor asignado:* ${asesorAsignado.nombre}\n` +
-          `_Especialidad: ${asesorAsignado.especialidades.join(", ")}_`;
-      }
+      // [SUSPENDIDO - Asesores de vacaciones por Semana Santa]
+      // if (asesorAsignado) {
+      //   response +=
+      //     `\n\n📋 *Asesor asignado:* ${asesorAsignado.nombre}\n` +
+      //     `_Especialidad: ${asesorAsignado.especialidades.join(", ")}_`;
+      // }
 
-      // Registrar en logs
-      const logMessage = asesorAsignado
-        ? `Modo SOPORTE activado para ${userId} - Asesor: ${asesorAsignado.nombre}`
-        : `Modo SOPORTE activado para ${userId}`;
-      await logger.log("SYSTEM", logMessage);
+      await logger.log("SYSTEM", `Modo SOPORTE activado para ${userId}`);
 
       // Agregar respuesta al historial
       await sessionManager.addMessage(userId, "assistant", response, chatId);
@@ -744,52 +757,77 @@ class WhatsAppBot {
   }
 
   /**
-   * Extrae IDs de imágenes del marcador {{ENVIAR_IMAGEN:id1,id2}} y retorna texto limpio + IDs
+   * Extrae IDs de medios del marcador {{ENVIAR_MEDIA:id1,id2}} o {{ENVIAR_IMAGEN:id1,id2}}
+   * y retorna texto limpio + IDs
    */
-  parseImageMarkers(text) {
-    const regex = /\{\{ENVIAR_IMAGEN:([\d,]+)\}\}/g;
-    const imageIds = [];
+  parseMediaMarkers(text) {
+    const regex = /\{\{ENVIAR_(?:MEDIA|IMAGEN):([\d,]+)\}\}/g;
+    const mediaIds = [];
     let match;
     while ((match = regex.exec(text)) !== null) {
       const ids = match[1].split(',').map(id => parseInt(id.trim())).filter(id => !isNaN(id));
-      imageIds.push(...ids);
+      mediaIds.push(...ids);
     }
     const cleanText = text.replace(regex, '').trim();
-    return { cleanText, imageIds };
+    return { cleanText, mediaIds };
   }
 
   /**
-   * Envía imágenes de la galería al chat de WhatsApp
+   * Envía medios (imágenes, videos, documentos) de la galería al chat de WhatsApp
    */
-  async sendImages(chatId, imageIds) {
+  async sendMedia(chatId, mediaIds) {
     const fs = require('fs').promises;
     const path = require('path');
 
-    for (const id of imageIds) {
+    for (const id of mediaIds) {
       try {
-        const image = await imageService.getById(id);
-        if (!image) {
-          console.log(`[Images] Imagen ID ${id} no encontrada, omitiendo`);
+        const media = await mediaService.getById(id);
+        if (!media) {
+          console.log(`[Media] Medio ID ${id} no encontrado, omitiendo`);
           continue;
         }
 
-        const imagePath = path.join(process.cwd(), image.file_path);
-        const imageBuffer = await fs.readFile(imagePath);
+        const mediaPath = path.join(process.cwd(), media.file_path);
+        const mediaBuffer = await fs.readFile(mediaPath);
 
-        await this.sock.sendMessage(chatId, {
-          image: imageBuffer,
-          caption: image.title,
-          mimetype: image.mime_type
-        });
+        let messagePayload;
+        const mediaType = media.media_type || 'image';
 
-        console.log(`[Images] ✅ Imagen enviada: ${image.title} (ID: ${id})`);
+        switch (mediaType) {
+          case 'video':
+            messagePayload = {
+              video: mediaBuffer,
+              caption: media.title,
+              mimetype: media.mime_type
+            };
+            break;
+          case 'document':
+            messagePayload = {
+              document: mediaBuffer,
+              mimetype: media.mime_type,
+              fileName: media.original_filename || media.title,
+              caption: media.title
+            };
+            break;
+          case 'image':
+          default:
+            messagePayload = {
+              image: mediaBuffer,
+              caption: media.title,
+              mimetype: media.mime_type
+            };
+            break;
+        }
 
-        // Pausa entre imágenes para evitar rate limiting
-        if (imageIds.indexOf(id) < imageIds.length - 1) {
+        await this.sock.sendMessage(chatId, messagePayload);
+        console.log(`[Media] ✅ ${mediaType} enviado: ${media.title} (ID: ${id})`);
+
+        // Pausa entre medios para evitar rate limiting
+        if (mediaIds.indexOf(id) < mediaIds.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       } catch (error) {
-        console.error(`[Images] ❌ Error enviando imagen ID ${id}:`, error.message);
+        console.error(`[Media] ❌ Error enviando medio ID ${id}:`, error.message);
       }
     }
   }
@@ -987,12 +1025,12 @@ class WhatsAppBot {
       console.log(`[PendingMessages] ID del mensaje: ${sendResult?.key?.id}`);
       console.log(`[PendingMessages] Status: ${sendResult?.status || 'enviado'}`);
 
-      // Enviar imágenes pendientes si las hay
-      if (this._pendingImages && this._pendingImages.chatId === from) {
-        const pendingIds = this._pendingImages.imageIds;
-        this._pendingImages = null;
-        console.log(`[PendingMessages] [Images] Enviando ${pendingIds.length} imagen(es) a ${userId}`);
-        await this.sendImages(from, pendingIds);
+      // Enviar medios pendientes si los hay
+      if (this._pendingMedia && this._pendingMedia.chatId === from) {
+        const pendingIds = this._pendingMedia.mediaIds;
+        this._pendingMedia = null;
+        console.log(`[PendingMessages] [Media] Enviando ${pendingIds.length} medio(s) a ${userId}`);
+        await this.sendMedia(from, pendingIds);
       }
 
       // Enviar estado de "disponible"

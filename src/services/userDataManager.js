@@ -90,10 +90,30 @@ class UserDataManager {
         return emailRegex.test(email);
     }
 
-    // Validar nombre (mínimo 2 caracteres, solo letras y espacios)
+    // Validar nombre (solo letras y espacios, máximo 4 palabras, sin frases comunes)
     isValidName(name) {
+        const trimmed = name.trim();
         const nameRegex = /^[a-zA-ZáéíóúÁÉÍÓÚñÑ\s]{2,50}$/;
-        return nameRegex.test(name.trim());
+        if (!nameRegex.test(trimmed)) return false;
+
+        // Rechazar si tiene más de 4 palabras (un nombre real no tiene tantas)
+        const words = trimmed.split(/\s+/);
+        if (words.length > 4) return false;
+
+        // Rechazar frases comunes que no son nombres
+        const lower = trimmed.toLowerCase();
+        const commonWords = [
+            'gracias', 'hola', 'buenos', 'buenas', 'dias', 'tardes', 'noches',
+            'no', 'si', 'que', 'como', 'donde', 'cuando', 'porque', 'pero',
+            'quiero', 'busco', 'necesito', 'tengo', 'estoy', 'puede', 'puedo',
+            'interesa', 'favor', 'ayuda', 'informacion', 'precio', 'costo',
+            'nave', 'naves', 'industrial', 'terreno', 'bodega'
+        ];
+        const wordSet = lower.split(/\s+/);
+        const commonCount = wordSet.filter(w => commonWords.includes(w)).length;
+        if (commonCount >= 2 || (words.length === 1 && commonWords.includes(lower))) return false;
+
+        return true;
     }
 
     // Obtener estado del proceso de recolección de datos

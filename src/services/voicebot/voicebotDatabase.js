@@ -114,6 +114,12 @@ class VoicebotDatabase {
         return await database.query(sql, [contactId]);
     }
 
+    // Resetear todos los contactos de una campaña a pending
+    async resetCampaignContacts(campaignId) {
+        const sql = `UPDATE voicebot_contacts SET call_status = 'pending', call_attempts = 0 WHERE campaign_id = ?`;
+        return await database.query(sql, [campaignId]);
+    }
+
     // ==================== CALLS ====================
 
     async createCall(callData) {
@@ -190,11 +196,8 @@ class VoicebotDatabase {
     // ==================== APPOINTMENTS ====================
 
     async createAppointment(appointmentData) {
-        // Mapear interest_level a valores válidos del ENUM (high/medium/low)
-        let interestLevel = appointmentData.interestLevel || 'medium';
-        if (interestLevel === 'none') {
-            interestLevel = 'low'; // "none" no existe en el ENUM, mapeamos a "low"
-        }
+        // Solo guardamos citas con interés alto confirmado
+        const interestLevel = 'high';
 
         return await database.insert('voicebot_appointments', {
             call_id: appointmentData.callId,

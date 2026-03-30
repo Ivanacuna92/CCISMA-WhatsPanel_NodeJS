@@ -1,6 +1,8 @@
 const database = require('./database');
 const logger = require('./logger');
 const config = require('../config/config');
+const sessionManager = require('./sessionManager');
+const userDataManager = require('./userDataManager');
 
 class FollowUpManager {
     constructor() {
@@ -95,6 +97,14 @@ class FollowUpManager {
 
             await logger.log('SYSTEM', `Seguimiento detenido: ${reason}`, userId);
             console.log(`✓ Seguimiento detenido para usuario ${userId}: ${reason}`);
+
+            // Limpiar contexto completo cuando la conversación termina,
+            // excepto si el usuario volvió a escribir (seguirá conversando)
+            if (reason !== 'volvio_activo' && reason !== 'modo_humano_activo') {
+                console.log(`[FollowUp] 🧹 Limpiando contexto completo para ${userId} (razón: ${reason})`);
+                await sessionManager.clearSession(userId);
+                await userDataManager.deleteUserData(userId);
+            }
         } catch (error) {
             console.error('Error deteniendo seguimiento:', error);
         }
@@ -108,9 +118,21 @@ class FollowUpManager {
         return this.followUps.get(userId) || null;
     }
 
+    isWithinAllowedHours() {
+        const nowMexico = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
+        const hour = nowMexico.getHours();
+        return hour >= 9 && hour < 19; // 9:00 AM a 6:59 PM
+    }
+
     async checkPendingFollowUps(sock, aiService, sessionManager) {
         const now = Date.now();
         console.log(`[FollowUp] 🔄 Revisando seguimientos pendientes... Total activos: ${this.followUps.size}`);
+
+        if (!this.isWithinAllowedHours()) {
+            const nowMexico = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Mexico_City' }));
+            console.log(`[FollowUp] ⏰ Fuera de horario permitido (9AM-7PM CDMX). Hora actual: ${nowMexico.getHours()}:${String(nowMexico.getMinutes()).padStart(2, '0')}. Se omite envío.`);
+            return;
+        }
 
         for (const [userId, followUp] of this.followUps.entries()) {
             try {
@@ -168,6 +190,9 @@ class FollowUpManager {
                         console.log(`  - 📤 Enviando mensaje a ${followUp.chatId}...`);
                         await sock.sendMessage(followUp.chatId, { text: followUpResult.message });
                         await logger.log('BOT', followUpResult.message, userId);
+
+                        // Guardar mensaje de seguimiento en el historial de sesión
+                        await sessionManager.addMessage(userId, 'assistant', followUpResult.message, followUp.chatId);
 
                         // Actualizar contador y timestamp
                         followUp.followUpCount++;

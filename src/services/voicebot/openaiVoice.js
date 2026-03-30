@@ -6,14 +6,26 @@ require('dotenv').config();
 
 class OpenAIVoiceService {
     constructor() {
+        // OpenAI config
         this.apiKey = process.env.OPENAI_API_KEY;
         this.baseURL = 'https://api.openai.com/v1';
         this.ttsVoice = process.env.OPENAI_TTS_VOICE || 'nova';
         this.whisperLanguage = process.env.OPENAI_WHISPER_LANGUAGE || 'es';
-        // Modelo rápido para conversación, modelo preciso para análisis
         this.gptModelFast = process.env.OPENAI_GPT_MODEL_FAST || 'gpt-4o-mini';
         this.gptModelAnalysis = process.env.OPENAI_GPT_MODEL_ANALYSIS || 'gpt-4o';
         this.conversationContexts = new Map();
+
+        // Eleven Labs config
+        this.elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+        this.elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || 'EXAVITQu4vr4xnSDxMaL';
+        this.elevenLabsModel = process.env.ELEVENLABS_MODEL || 'eleven_multilingual_v2';
+        this.elevenLabsStability = parseFloat(process.env.ELEVENLABS_STABILITY || '0.5');
+        this.elevenLabsSimilarity = parseFloat(process.env.ELEVENLABS_SIMILARITY || '0.75');
+        this.elevenLabsBaseURL = 'https://api.elevenlabs.io/v1';
+
+        // TTS Provider selection
+        this.ttsProvider = process.env.TTS_PROVIDER || 'elevenlabs';
+        console.log(`🎤 TTS Provider: ${this.ttsProvider.toUpperCase()}`);
     }
 
     // ==================== WHISPER (Speech-to-Text) ====================
@@ -29,8 +41,8 @@ class OpenAIVoiceService {
             });
             formData.append('model', 'whisper-1');
             formData.append('language', language || this.whisperLanguage);
-            // Prompt optimizado para llamadas telefónicas de ventas
-            formData.append('prompt', 'Llamada telefónica de ventas de naves industriales. El cliente responde con frases cortas como: sí, no, me interesa, está bien, claro, mañana, el lunes, a las diez, no gracias, después.');
+            // Prompt optimizado para llamadas telefónicas - ignorar ruido de fondo
+            formData.append('prompt', 'Llamada telefónica directa. Solo transcribir la voz principal más cercana al micrófono. Ignorar ruidos de fondo, televisión, radio, conversaciones lejanas, música ambiente. El cliente habla directamente al teléfono con frases cortas: sí, no, me interesa, está bien, claro, mañana, el lunes, a las diez, no gracias, después, quién habla, de dónde.');
 
             const response = await axios.post(
                 `${this.baseURL}/audio/transcriptions`,
@@ -40,14 +52,15 @@ class OpenAIVoiceService {
                         ...formData.getHeaders(),
                         'Authorization': `Bearer ${this.apiKey}`
                     },
-                    timeout: 6000 // 6 segundos máximo para Whisper (audios cortos)
+                    timeout: 10000 // 10 segundos para Whisper (mejor precisión)
                 }
             );
 
             let transcribedText = response.data.text || '';
 
-            // Filtrar alucinaciones conocidas de Whisper (frases que inventa cuando hay silencio)
+            // Filtrar alucinaciones conocidas de Whisper (frases que inventa cuando hay silencio o ruido)
             const hallucinations = [
+                // Frases de YouTube/podcasts
                 'eso es todo por hoy',
                 'nos vemos la próxima semana',
                 'nos vemos la proxima semana',
@@ -62,17 +75,67 @@ class OpenAIVoiceService {
                 'hasta la proxima',
                 'bendiciones',
                 'que dios te bendiga',
+                // Subtítulos - MUY COMÚN
                 'subtítulos por',
                 'subtitulos por',
+                'subtítulos realizados',
+                'subtitulos realizados',
+                'subtítulos en español',
+                'subtitulos en espanol',
                 'amara.org',
+                'amara org',
+                'comunidad de amara',
+                'realizado por',
+                'traducido por',
+                'transcrito por',
+                // URLs
                 'www.',
                 'http',
+                '.com',
+                '.org',
+                '.net',
+                // Símbolos de música
                 '♪',
                 '🎵',
+                '🎶',
+                // Etiquetas
                 '[música]',
                 '[musica]',
+                '[music]',
                 '[applause]',
-                '[risas]'
+                '[risas]',
+                '[laughter]',
+                '[ruido]',
+                '[noise]',
+                '[inaudible]',
+                '[silencio]',
+                '[silence]',
+                '[sonido]',
+                '[sound]',
+                // Ruido de fondo
+                'música de fondo',
+                'ruido de fondo',
+                'static',
+                'estática',
+                // Sonidos sin significado
+                '...',
+                'hmm',
+                'mmm',
+                'uh',
+                'um',
+                'eh',
+                'ah',
+                'oh',
+                // Frases de silencio
+                'silencio',
+                'no hay audio',
+                'sin audio',
+                'audio no disponible',
+                // Frases religiosas random
+                'amén',
+                'amen',
+                'aleluya',
+                'gloria a dios'
             ];
 
             const lowerText = transcribedText.toLowerCase();
@@ -122,17 +185,17 @@ class OpenAIVoiceService {
                 {
                     model: this.gptModelFast, // Modelo rápido para conversación
                     messages: messages,
-                    temperature: 0.6, // Más determinístico = más rápido
-                    max_tokens: 120, // ~80-90 palabras - balance entre completitud y latencia
-                    presence_penalty: 0.5, // Evita repetición = respuestas más directas
-                    frequency_penalty: 0.3 // Menos palabras repetidas
+                    temperature: 0.3, // Más bajo = respuestas más consistentes y predecibles
+                    max_tokens: 100, // Respuestas más concisas
+                    presence_penalty: 0.6, // Evita repetición
+                    frequency_penalty: 0.4 // Menos palabras repetidas
                 },
                 {
                     headers: {
                         'Authorization': `Bearer ${this.apiKey}`,
                         'Content-Type': 'application/json'
                     },
-                    timeout: 5000 // 5 segundos máximo para GPT (más agresivo)
+                    timeout: 8000 // 8 segundos para GPT (balance entre velocidad y completitud)
                 }
             );
 
@@ -201,28 +264,155 @@ class OpenAIVoiceService {
             console.log('No se pudo cargar prompt de BD, usando default');
         }
 
-        // Prompt por defecto - OPTIMIZADO PARA BAJA LATENCIA
-        return `Vendedor telefónico de Navetec. Ventas de naves industriales.
+        // Prompt por defecto - TONO CONSULTIVO Y PROFESIONAL
+        return `Eres un asesor de inversión industrial de Navetec. Tu objetivo es reactivar leads y agendar visitas a naves industriales.
 
-REGLA #1: Respuestas MÁXIMO 20 palabras. Sé breve.
+TONO DE VOZ:
+- Profesional, calmado y consultivo (como un asesor, no un vendedor)
+- Formal pero amable, transmite seguridad sin sonar robótico
+- Humaniza la conversación: "quiero actualizarte", "estoy revisando tu registro"
+- Ritmo natural, pausado, no acelerado
+- Explica en palabras simples, sin tecnicismos innecesarios
 
-FLUJO OBLIGATORIO PARA AGENDAR CITA:
-1. Cliente interesado → Pregunta: "¿Qué día te queda bien para visitarla?"
-2. Cliente da día → SIEMPRE pregunta: "Perfecto, ¿a qué hora te acomoda?"
-3. Cliente da hora → Confirma: "Listo, te agendo el [día] a las [hora]. Te esperamos."
+REGLAS DE COMUNICACIÓN:
+- Máximo 2 oraciones por respuesta
+- Saluda profesionalmente y explica rápido quién llama y por qué
+- Haz una pregunta clave para avanzar la conversación
+- No insistas demasiado, solo ofrece opciones
+- Respeta silencios y pausas del cliente
 
-IMPORTANTE: NUNCA confirmes una cita sin tener TANTO el día COMO la hora. Si solo tienes el día, DEBES preguntar la hora.
+CUANDO PREGUNTEN QUIÉN HABLA O QUIÉN ERES:
+Si el cliente pregunta "quién habla", "de dónde llaman", "quién es", "con quién hablo", "de qué empresa", "qué quieren", etc:
+- SIEMPRE responde: "Te habla un asesor de Navetec, una empresa de naves industriales. Te llamo porque tenemos una nave disponible que podría interesarte."
+- NO te confundas ni digas que no sabes quién eres
+- Si insisten, repite que eres de Navetec y estás para ayudarle
 
-Si dice NO → "Gracias por tu tiempo, que tengas buen día."
-Si pregunta precio/info → Da el dato breve y pregunta si quiere agendar visita.
+CUANDO PREGUNTEN INFORMACIÓN DE LA NAVE:
+Si el cliente pregunta precio, tamaño, ubicación, características, detalles, metros cuadrados, cuánto cuesta, dónde está, etc:
+- USA LOS DATOS DE LA NAVE que tienes en el contexto
+- Si preguntan el PRECIO: responde el precio exacto de la nave
+- Si preguntan el TAMAÑO: responde los metros cuadrados
+- Si preguntan la UBICACIÓN: responde dónde está ubicada
+- Si preguntan el TIPO: responde qué tipo de nave es
+- Si preguntan VENTAJAS: responde las ventajas estratégicas
+- Si preguntan INFO ADICIONAL: responde la información extra
+- SIEMPRE termina preguntando si le gustaría agendar una visita
+- NUNCA digas que no tienes esa información si está en los datos de la nave
+
+CUANDO EL CLIENTE NO ENTIENDE O PIDE QUE REPITAS:
+Si el cliente dice cosas como "qué dijiste", "cómo", "no te escuché", "repite", "mande", "perdón", "no entendí":
+- REPITE lo último que dijiste, con las MISMAS palabras o muy similares
+- NO continues la conversación
+- NO digas algo nuevo
+- NO cuelgues
+- Solo repite la información de forma clara
+
+CUANDO TÚ NO ENTIENDES AL CLIENTE:
+- Di: "Disculpa, no te escuché bien, ¿me puedes repetir?"
+- NO inventes lo que dijo
+- NO asumas nada
+
+CUANDO DES INFORMACIÓN TÉCNICA:
+- Sé preciso con datos: precio por m², ubicación, tamaño
+- Explica beneficios en términos concretos
+- Da contexto a los números, no los sueltes solos
+- Presenta comparativas breves solo si son relevantes
+
+FLUJO:
+1. Si muestra interés → pregunta qué día le acomoda para una visita
+2. Si da el día → pregunta la hora
+3. Si da día y hora → confirma: "Perfecto, te agendo el [día] a las [hora]. Te esperamos."
+4. Si hace preguntas sobre la nave → responde con los datos y pregunta si quiere agendar
+5. Si dice "no me interesa" o "no gracias" CLARAMENTE → "Entendido, gracias por tu tiempo."
+
+IMPORTANTE - CUÁNDO DESPEDIRSE:
+- SOLO despídete si el cliente dice CLARAMENTE que NO le interesa (ej: "no me interesa", "no gracias", "no quiero")
+- Si el cliente hace preguntas (ubicación, precio, tamaño, etc.) → NO te despidas, responde la pregunta
+- Si el cliente dice algo confuso o no entiendes → NO te despidas, pide que repita
+- Si el cliente solo dice "no" sin contexto → pregunta "¿No le interesa la información?" antes de despedirte
+- NUNCA te despidas después de dar información, siempre pregunta si quiere agendar visita
 
 PROHIBIDO:
-- Confirmar cita sin hora
-- Repetir información
-- Frases largas`;
+- Sonar vendedor o exagerado ("aprovecha YA", "última oportunidad")
+- Ser invasivo o presionar
+- Usar lenguaje emocional fuera de lugar
+- Inventar información
+- Soltar números sin contexto
+- Colgar o despedirte si el cliente solo pide que repitas
+- Continuar con la conversación si el cliente no entendió
+- Decir que no sabes quién eres o de dónde llamas
+- Decir que no tienes información de la nave cuando SÍ la tienes en el contexto`;
     }
 
     // ==================== TTS (Text-to-Speech) ====================
+
+    // Método principal que elige el provider
+    async textToSpeech(text, outputPath, voice = null) {
+        if (this.ttsProvider === 'elevenlabs') {
+            return this.textToSpeechElevenLabs(text, outputPath, voice);
+        } else {
+            return this.textToSpeechOpenAI(text, outputPath, voice);
+        }
+    }
+
+    // ==================== ELEVEN LABS TTS ====================
+
+    async textToSpeechElevenLabs(text, outputPath, voiceId = null) {
+        try {
+            const normalizedText = this.normalizeTextForTTS(text);
+            const voice = voiceId || this.elevenLabsVoiceId;
+
+            console.log(`🎵 Generando TTS con Eleven Labs, voz: ${voice}, modelo: ${this.elevenLabsModel}`);
+
+            // Usar PCM 24kHz para compatibilidad con el flujo existente (igual que OpenAI)
+            const response = await axios.post(
+                `${this.elevenLabsBaseURL}/text-to-speech/${voice}?output_format=pcm_24000`,
+                {
+                    text: normalizedText,
+                    model_id: this.elevenLabsModel,
+                    voice_settings: {
+                        stability: this.elevenLabsStability,
+                        similarity_boost: this.elevenLabsSimilarity,
+                        style: 0.0,
+                        use_speaker_boost: true
+                    }
+                },
+                {
+                    headers: {
+                        'xi-api-key': this.elevenLabsApiKey,
+                        'Content-Type': 'application/json'
+                    },
+                    responseType: 'arraybuffer',
+                    timeout: 15000
+                }
+            );
+
+            // Guardar PCM en el path exacto que se solicita
+            const pcmPath = outputPath.replace(/\.(wav|mp3)$/, '.pcm');
+            await fs.writeFile(pcmPath, response.data);
+
+            console.log(`✅ TTS Eleven Labs generado (PCM 24kHz): ${pcmPath} (${response.data.length} bytes)`);
+
+            return {
+                success: true,
+                path: pcmPath,
+                size: response.data.length,
+                format: 'pcm'
+            };
+        } catch (error) {
+            console.error('❌ Error en Eleven Labs TTS:', error.response?.data || error.message);
+
+            // Fallback a OpenAI si Eleven Labs falla
+            if (this.apiKey) {
+                console.log('⚠️ Intentando fallback a OpenAI TTS...');
+                return this.textToSpeechOpenAI(text, outputPath);
+            }
+
+            throw new Error(`Error generando audio con Eleven Labs: ${error.message}`);
+        }
+    }
+
+    // ==================== OPENAI TTS ====================
 
     // Normalizar texto para que el TTS pronuncie correctamente
     normalizeTextForTTS(text) {
@@ -255,22 +445,22 @@ PROHIBIDO:
         return normalized;
     }
 
-    async textToSpeech(text, outputPath, voice = null) {
+    async textToSpeechOpenAI(text, outputPath, voice = null) {
         try {
             // Normalizar texto para mejor pronunciación
             const normalizedText = this.normalizeTextForTTS(text);
 
-            // tts-1: rápido (~200ms), tts-1-hd: mejor calidad pero ~500ms más lento
-            // Velocidad 0.95 es un buen balance - claro pero no lento
-            const ttsModel = process.env.OPENAI_TTS_MODEL || 'tts-1';
-            const ttsSpeed = parseFloat(process.env.OPENAI_TTS_SPEED || '0.95');
+            // tts-1-hd: mejor calidad de audio, más natural para llamadas de venta
+            // Velocidad 0.9 - más pausado y natural para mejor comprensión
+            const ttsModel = process.env.OPENAI_TTS_MODEL || 'tts-1-hd';
+            const ttsSpeed = parseFloat(process.env.OPENAI_TTS_SPEED || '0.9');
 
             console.log(`🎵 Generando TTS con modelo ${ttsModel}, voz ${voice || this.ttsVoice}, velocidad ${ttsSpeed}x`);
 
             const response = await axios.post(
                 `${this.baseURL}/audio/speech`,
                 {
-                    model: 'tts-1', // tts-1 es más rápido que tts-1-hd
+                    model: ttsModel,
                     input: normalizedText,
                     voice: voice || this.ttsVoice,
                     response_format: 'pcm', // PCM 24kHz 16-bit mono - sin compresión = mejor calidad
@@ -282,7 +472,7 @@ PROHIBIDO:
                         'Content-Type': 'application/json'
                     },
                     responseType: 'arraybuffer',
-                    timeout: 6000 // 6 segundos máximo para TTS (textos cortos)
+                    timeout: 15000 // 15 segundos para TTS-HD (mayor calidad requiere más tiempo)
                 }
             );
 
@@ -331,9 +521,9 @@ PROHIBIDO:
                 context
             );
 
-            // 3. Convertir respuesta a audio (TTS)
+            // 3. Convertir respuesta a audio (TTS - OpenAI o Eleven Labs)
             console.log('🔊 Convirtiendo respuesta a audio...');
-            await this.textToSpeech(response.text, audioOutputPath);
+            const ttsResult = await this.textToSpeech(response.text, audioOutputPath);
 
             const processingTime = Date.now() - startTime;
 
@@ -341,7 +531,8 @@ PROHIBIDO:
                 success: true,
                 transcription: transcription.text,
                 response: response.text,
-                audioPath: audioOutputPath,
+                audioPath: ttsResult.path, // Usar el path correcto (mp3 o pcm)
+                audioFormat: ttsResult.format,
                 processingTime: processingTime,
                 tokensUsed: response.tokensUsed
             };
@@ -400,13 +591,13 @@ Responde ÚNICAMENTE con este JSON (sin explicaciones):
 {
   "interest": true/false,
   "agreement": true/false,
-  "interestLevel": "high/medium/low/none",
+  "interestLevel": "high/none",
   "wantsAppointment": true/false,
   "appointmentDate": "YYYY-MM-DD o null",
   "appointmentTime": "HH:MM o null",
   "rawDateMentioned": "texto original de fecha mencionada o null",
   "rawTimeMentioned": "texto original de hora mencionada o null",
-  "clientResponse": "positivo/negativo/indeciso/no_contesto",
+  "clientResponse": "positivo/negativo",
   "notes": "resumen breve de lo acordado o razón de no agendar"
 }`;
 
@@ -475,13 +666,13 @@ Responde ÚNICAMENTE con este JSON (sin explicaciones):
         const result = {
             interest: hasPositiveResponse && !hasRejection,
             agreement: (hasPositiveResponse && botConfirmed) || (dayMatch && timeMatch && hasPositiveResponse),
-            interestLevel: hasRejection ? 'none' : (hasPositiveResponse ? 'high' : 'low'),
+            interestLevel: (hasPositiveResponse && !hasRejection) ? 'high' : 'none',
             wantsAppointment: hasPositiveResponse && (dayMatch !== null || timeMatch !== null),
             appointmentDate: dayMatch ? this.parseRelativeDate(dayMatch[0]) : null,
             appointmentTime: timeMatch ? this.parseRelativeTime(timeMatch[0]) : null,
             rawDateMentioned: dayMatch ? dayMatch[0] : null,
             rawTimeMentioned: timeMatch ? timeMatch[0] : null,
-            clientResponse: hasRejection ? 'negativo' : (hasPositiveResponse ? 'positivo' : 'indeciso'),
+            clientResponse: hasPositiveResponse ? 'positivo' : 'negativo',
             notes: `Regex: positivo=${hasPositiveResponse}, confirmado=${botConfirmed}, día=${dayMatch?.[0]}, hora=${timeMatch?.[0]}`
         };
 

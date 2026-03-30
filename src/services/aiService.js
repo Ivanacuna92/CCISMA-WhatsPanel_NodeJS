@@ -1,7 +1,7 @@
 const axios = require('axios');
 const config = require('../config/config');
 const csvService = require('./csvService');
-const imageService = require('./imageService');
+const mediaService = require('./mediaService');
 
 class AIService {
     constructor() {
@@ -103,17 +103,17 @@ Responde ÚNICAMENTE con una de estas palabras: ACEPTADO, RECHAZADO, FRUSTRADO, 
             const systemMessage = enrichedMessages.find(m => m.role === 'system');
             
             if (systemMessage) {
-                systemMessage.content = systemMessage.content + `\n\n*BASE DE DATOS DE NAVES DISPONIBLES:*\n\n${csvData}\n\nUsa esta información cuando el usuario pregunte sobre naves, parques industriales, precios, disponibilidad o cualquier tema relacionado. Si el usuario pregunta por algo específico que está en esta base de datos, úsala para responder de manera precisa y actualizada.`;
+                systemMessage.content = systemMessage.content + `\n\n*BASE DE DATOS DE NAVES DISPONIBLES:*\n\n${csvData}\n\nUsa esta información cuando el usuario pregunte sobre naves, parques industriales, disponibilidad o cualquier tema relacionado. Si el usuario pregunta por algo específico que está en esta base de datos, úsala para responder de manera precisa y actualizada. IMPORTANTE: NO compartas precios con el cliente bajo ninguna circunstancia.`;
             }
 
             // Inyectar galería de imágenes disponibles
             try {
-                const imageSummary = await imageService.getImageSummaryForPrompt();
-                if (imageSummary && systemMessage) {
-                    systemMessage.content += `\n\n*GALERIA DE IMAGENES DISPONIBLES:*\n\n${imageSummary}`;
+                const mediaSummary = await mediaService.getMediaSummaryForPrompt();
+                if (mediaSummary && systemMessage) {
+                    systemMessage.content += `\n\n*GALERIA DE MEDIOS DISPONIBLES (imagenes, videos y documentos):*\n\n${mediaSummary}`;
                 }
             } catch (imgError) {
-                console.error('Error agregando imágenes al prompt:', imgError);
+                console.error('Error agregando medios al prompt:', imgError);
             }
 
             return enrichedMessages;

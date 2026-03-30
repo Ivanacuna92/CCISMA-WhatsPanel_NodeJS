@@ -355,10 +355,10 @@ export async function deleteCSV(filename) {
   return response.json();
 }
 
-// ===== FUNCIONES DE GALERIA DE IMAGENES =====
+// ===== FUNCIONES DE GALERIA DE MEDIOS =====
 
-export async function uploadImage(formData) {
-  const response = await fetch(`${API_BASE}/images/upload`, {
+export async function uploadMedia(formData) {
+  const response = await fetch(`${API_BASE}/media/upload`, {
     method: 'POST',
     credentials: 'include',
     body: formData
@@ -366,7 +366,7 @@ export async function uploadImage(formData) {
 
   if (!response.ok) {
     const errorData = await response.json();
-    const error = new Error(errorData.error || 'Error al cargar imagen');
+    const error = new Error(errorData.error || 'Error al cargar archivo');
     error.response = { data: errorData };
     throw error;
   }
@@ -374,31 +374,40 @@ export async function uploadImage(formData) {
   return response.json();
 }
 
-export async function getImages(category = null) {
-  const url = category
-    ? `${API_BASE}/images?category=${encodeURIComponent(category)}`
-    : `${API_BASE}/images`;
+export async function getMedia(category = null, mediaType = null) {
+  let url = `${API_BASE}/media`;
+  const params = [];
+  if (category) params.push(`category=${encodeURIComponent(category)}`);
+  if (mediaType) params.push(`mediaType=${encodeURIComponent(mediaType)}`);
+  if (params.length > 0) url += `?${params.join('&')}`;
+
   const response = await fetchWithCredentials(url);
 
   if (!response.ok) {
-    throw new Error('Error al obtener imagenes');
+    throw new Error('Error al obtener medios');
   }
 
   return response.json();
 }
 
-export async function deleteImage(id) {
-  const response = await fetchWithCredentials(`${API_BASE}/images/${id}`, {
+export async function deleteMedia(id) {
+  const response = await fetchWithCredentials(`${API_BASE}/media/${id}`, {
     method: 'DELETE'
   });
 
   if (!response.ok) {
-    throw new Error('Error al eliminar imagen');
+    throw new Error('Error al eliminar medio');
   }
 
   return response.json();
 }
 
-export function getImageUrl(id) {
-  return `${API_BASE}/images/${id}/file`;
+export function getMediaUrl(id) {
+  return `${API_BASE}/media/${id}/file`;
 }
+
+// Backward compat aliases
+export const uploadImage = uploadMedia;
+export const getImages = (category) => getMedia(category);
+export const deleteImage = deleteMedia;
+export const getImageUrl = getMediaUrl;

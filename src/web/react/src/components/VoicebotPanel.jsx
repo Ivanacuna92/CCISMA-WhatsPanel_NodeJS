@@ -1,10 +1,58 @@
 import { useState, useEffect } from 'react';
-import { Phone, Upload, Play, Pause, Square, Calendar, BarChart3 } from 'lucide-react';
+import { Phone, Upload, Play, Pause, Square, Calendar, BarChart3, PhoneCall, PhoneOutgoing } from 'lucide-react';
 import voicebotApi from '../services/voicebotApi';
 import CampaignCreate from './voicebot/CampaignCreate';
 import CampaignList from './voicebot/CampaignList';
 import CampaignDetails from './voicebot/CampaignDetails';
 import AppointmentsList from './voicebot/AppointmentsList';
+
+// Componente de indicador de llamadas activas
+function ActiveCallsIndicator({ activeCallsCount }) {
+    const [bars, setBars] = useState([40, 70, 50, 80]);
+
+    // Animar las barras del ecualizador
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setBars(prev => prev.map(() => Math.random() * 60 + 30));
+        }, 300);
+        return () => clearInterval(interval);
+    }, []);
+
+    if (activeCallsCount === 0) return null;
+
+    return (
+        <div className="fixed bottom-6 right-6 z-50">
+            <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white px-6 py-4 rounded-2xl shadow-2xl flex items-center space-x-4">
+                {/* Icono con ping */}
+                <div className="relative flex items-center justify-center">
+                    <span className="absolute flex h-12 w-12">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-30"></span>
+                    </span>
+                    <PhoneOutgoing className="relative h-7 w-7" />
+                </div>
+
+                {/* Texto */}
+                <div>
+                    <p className="text-sm font-medium opacity-90">Llamadas en curso</p>
+                    <p className="text-2xl font-bold">
+                        {activeCallsCount} {activeCallsCount === 1 ? 'llamada' : 'llamadas'}
+                    </p>
+                </div>
+
+                {/* Barras de progreso animadas (tipo ecualizador) */}
+                <div className="flex items-end space-x-1 h-8">
+                    {bars.map((height, i) => (
+                        <div
+                            key={i}
+                            className="w-1.5 bg-white rounded-full transition-all duration-300 ease-in-out"
+                            style={{ height: `${height}%` }}
+                        />
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+}
 
 function VoicebotPanel() {
     const [activeTab, setActiveTab] = useState('campaigns');
@@ -15,8 +63,11 @@ function VoicebotPanel() {
 
     useEffect(() => {
         fetchInitialData();
-        // Actualizar estado cada 5 segundos
-        const interval = setInterval(fetchStatus, 5000);
+        // Actualizar estado y campañas cada 2 segundos para tiempo real
+        const interval = setInterval(() => {
+            fetchStatus();
+            fetchCampaigns();
+        }, 2000);
         return () => clearInterval(interval);
     }, []);
 
@@ -100,7 +151,7 @@ function VoicebotPanel() {
                             </div>
                             <div className="bg-blue-100 px-3 py-1 rounded-full">
                                 <span className="text-sm font-semibold text-blue-800">
-                                    {status.activeCallsCount || 0} / {status.maxConcurrentCalls || 2} llamadas activas
+                                    {status.activeCallsCount || 0} {(status.activeCallsCount || 0) === 1 ? 'llamada activa' : 'llamadas activas'}
                                 </span>
                             </div>
                         </div>
@@ -159,6 +210,13 @@ function VoicebotPanel() {
                     <AppointmentsList />
                 )}
             </div>
+
+            {/* Indicador flotante de llamadas activas */}
+            {status && (
+                <ActiveCallsIndicator
+                    activeCallsCount={status.activeCallsCount || 0}
+                />
+            )}
         </div>
     );
 }

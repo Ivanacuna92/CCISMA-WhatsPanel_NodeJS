@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Upload, CheckCircle, XCircle, Trash2, Image, Filter } from 'lucide-react';
+import { Upload, CheckCircle, XCircle, Trash2, Image, Filter, Film, FileText } from 'lucide-react';
 import * as api from '../services/api';
 
 const CATEGORIES = [
@@ -8,15 +8,45 @@ const CATEGORIES = [
   { value: 'fotos', label: 'Fotos de Naves' },
   { value: 'renders', label: 'Renders' },
   { value: 'ubicacion', label: 'Ubicacion' },
+  { value: 'fichas', label: 'Fichas Tecnicas' },
+  { value: 'videos', label: 'Videos' },
   { value: 'otro', label: 'Otro' },
 ];
 
-function ImageGallery() {
-  const [images, setImages] = useState([]);
+const MEDIA_TYPE_FILTERS = [
+  { value: '', label: 'Todos los tipos' },
+  { value: 'image', label: 'Imagenes' },
+  { value: 'video', label: 'Videos' },
+  { value: 'document', label: 'Documentos' },
+];
+
+const ALLOWED_TYPES = [
+  'image/jpeg', 'image/png', 'image/gif', 'image/webp',
+  'video/mp4', 'video/webm', 'video/quicktime',
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+];
+
+function getMediaTypeLabel(mediaType) {
+  if (mediaType === 'video') return 'Video';
+  if (mediaType === 'document') return 'Documento';
+  return 'Imagen';
+}
+
+function getSelectedFileIcon(file) {
+  if (file.type.startsWith('video/')) return <Film className="h-8 w-8 text-blue-500" />;
+  if (file.type === 'application/pdf' || file.type.startsWith('application/')) return <FileText className="h-8 w-8 text-red-500" />;
+  return <Image className="h-8 w-8 text-navetec-primary" />;
+}
+
+function MediaGallery() {
+  const [items, setItems] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [filterCategory, setFilterCategory] = useState('');
+  const [filterMediaType, setFilterMediaType] = useState('');
 
   // Form state
   const [title, setTitle] = useState('');
@@ -26,15 +56,15 @@ function ImageGallery() {
   const [selectedFile, setSelectedFile] = useState(null);
 
   useEffect(() => {
-    fetchImages();
-  }, [filterCategory]);
+    fetchMedia();
+  }, [filterCategory, filterMediaType]);
 
-  const fetchImages = async () => {
+  const fetchMedia = async () => {
     try {
-      const response = await api.getImages(filterCategory || null);
-      setImages(response.images || []);
+      const response = await api.getMedia(filterCategory || null, filterMediaType || null);
+      setItems(response.images || []);
     } catch (error) {
-      console.error('Error fetching images:', error);
+      console.error('Error fetching media:', error);
     }
   };
 
@@ -55,10 +85,10 @@ function ImageGallery() {
 
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const file = e.dataTransfer.files[0];
-      if (file.type.startsWith('image/')) {
+      if (ALLOWED_TYPES.includes(file.type)) {
         setSelectedFile(file);
       } else {
-        setUploadStatus({ type: 'error', message: 'Solo se permiten archivos de imagen' });
+        setUploadStatus({ type: 'error', message: 'Tipo de archivo no permitido. Se aceptan imagenes, videos y PDFs.' });
       }
     }
   };
@@ -71,7 +101,7 @@ function ImageGallery() {
 
   const handleUpload = async () => {
     if (!selectedFile) {
-      setUploadStatus({ type: 'error', message: 'Selecciona una imagen' });
+      setUploadStatus({ type: 'error', message: 'Selecciona un archivo' });
       return;
     }
     if (!title.trim()) {
@@ -83,24 +113,23 @@ function ImageGallery() {
     setUploadStatus(null);
 
     const formData = new FormData();
-    formData.append('image', selectedFile);
+    formData.append('media', selectedFile);
     formData.append('title', title.trim());
     formData.append('category', category);
     formData.append('description', description.trim());
     formData.append('tags', tags.trim());
 
     try {
-      await api.uploadImage(formData);
-      setUploadStatus({ type: 'success', message: 'Imagen subida exitosamente' });
-      // Reset form
+      await api.uploadMedia(formData);
+      setUploadStatus({ type: 'success', message: 'Archivo subido exitosamente' });
       setTitle('');
       setDescription('');
       setTags('');
       setSelectedFile(null);
       setCategory('fotos');
-      fetchImages();
+      fetchMedia();
     } catch (error) {
-      let errorMessage = 'Error al cargar la imagen';
+      let errorMessage = 'Error al cargar el archivo';
       if (error.response?.data?.error) {
         errorMessage = error.response.data.error;
       } else if (error.message) {
@@ -112,26 +141,26 @@ function ImageGallery() {
     }
   };
 
-  const handleDelete = async (id, imageTitle) => {
-    if (!confirm(`Eliminar imagen "${imageTitle}"?`)) return;
+  const handleDelete = async (id, itemTitle) => {
+    if (!confirm(`Eliminar "${itemTitle}"?`)) return;
 
     try {
-      await api.deleteImage(id);
-      setUploadStatus({ type: 'success', message: `Imagen "${imageTitle}" eliminada` });
-      fetchImages();
+      await api.deleteMedia(id);
+      setUploadStatus({ type: 'success', message: `"${itemTitle}" eliminado` });
+      fetchMedia();
     } catch (error) {
-      setUploadStatus({ type: 'error', message: 'Error al eliminar la imagen' });
+      setUploadStatus({ type: 'error', message: 'Error al eliminar el archivo' });
     }
   };
 
   return (
     <div className="p-6 overflow-auto flex-1">
       <div className="max-w-6xl mx-auto">
-        <h2 className="text-2xl font-bold mb-6 text-gray-800">Galeria de Imagenes</h2>
+        <h2 className="text-2xl font-bold mb-6 text-gray-800">Galeria de Medios</h2>
 
         {/* Upload Section */}
         <div className="bg-white rounded-lg shadow p-6 mb-6">
-          <h3 className="text-lg font-semibold mb-4">Subir Imagen</h3>
+          <h3 className="text-lg font-semibold mb-4">Subir Archivo</h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div>
@@ -162,7 +191,7 @@ function ImageGallery() {
                 type="text"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="Descripcion breve de la imagen"
+                placeholder="Descripcion breve del archivo"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-navetec-primary"
               />
             </div>
@@ -190,7 +219,7 @@ function ImageGallery() {
           >
             {selectedFile ? (
               <div className="flex items-center justify-center gap-3">
-                <Image className="h-8 w-8 text-navetec-primary" />
+                {getSelectedFileIcon(selectedFile)}
                 <div className="text-left">
                   <p className="font-medium">{selectedFile.name}</p>
                   <p className="text-sm text-gray-500">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
@@ -205,21 +234,21 @@ function ImageGallery() {
             ) : (
               <>
                 <Upload className="mx-auto h-10 w-10 text-gray-400 mb-3" />
-                <p className="text-sm mb-2">Arrastra y suelta una imagen aqui</p>
+                <p className="text-sm mb-2">Arrastra y suelta un archivo aqui</p>
                 <p className="text-xs text-gray-500 mb-3">o</p>
                 <label className="inline-block">
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/gif,image/webp"
+                    accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,video/quicktime,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                     onChange={handleFileInput}
                     className="hidden"
                     disabled={uploading}
                   />
                   <span className="px-4 py-2 bg-navetec-primary text-white rounded hover:bg-navetec-dark cursor-pointer inline-block text-sm">
-                    Seleccionar imagen
+                    Seleccionar archivo
                   </span>
                 </label>
-                <p className="text-xs text-gray-500 mt-3">JPEG, PNG, GIF, WEBP - Max 10MB</p>
+                <p className="text-xs text-gray-500 mt-3">Imagenes, videos o documentos - Max 50MB</p>
               </>
             )}
           </div>
@@ -239,7 +268,7 @@ function ImageGallery() {
               ) : (
                 <>
                   <Upload className="h-4 w-4" />
-                  Subir Imagen
+                  Subir Archivo
                 </>
               )}
             </button>
@@ -265,9 +294,9 @@ function ImageGallery() {
         <div className="bg-white rounded-lg shadow p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold">
-              Imagenes ({images.length})
+              Medios ({items.length})
             </h3>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               <Filter className="h-4 w-4 text-gray-500" />
               <select
                 value={filterCategory}
@@ -279,40 +308,77 @@ function ImageGallery() {
                   <option key={cat.value} value={cat.value}>{cat.label}</option>
                 ))}
               </select>
+              <select
+                value={filterMediaType}
+                onChange={(e) => setFilterMediaType(e.target.value)}
+                className="px-3 py-1.5 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-navetec-primary"
+              >
+                {MEDIA_TYPE_FILTERS.map(t => (
+                  <option key={t.value} value={t.value}>{t.label}</option>
+                ))}
+              </select>
             </div>
           </div>
 
-          {images.length === 0 ? (
+          {items.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
               <Image className="mx-auto h-12 w-12 text-gray-300 mb-3" />
-              <p>No hay imagenes {filterCategory ? 'en esta categoria' : 'subidas aun'}</p>
+              <p>No hay medios {filterCategory || filterMediaType ? 'con este filtro' : 'subidos aun'}</p>
             </div>
           ) : (
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {images.map(img => (
-                <div key={img.id} className="bg-gray-50 rounded-lg overflow-hidden border hover:shadow-md transition-shadow">
-                  <img
-                    src={api.getImageUrl(img.id)}
-                    alt={img.title}
-                    className="w-full h-40 object-cover"
-                    loading="lazy"
-                  />
+              {items.map(item => (
+                <div key={item.id} className="bg-gray-50 rounded-lg overflow-hidden border hover:shadow-md transition-shadow">
+                  {/* Preview area */}
+                  {item.media_type === 'video' ? (
+                    <div className="w-full h-40 bg-gray-800 flex items-center justify-center relative">
+                      <Film className="h-12 w-12 text-white opacity-70" />
+                      <span className="absolute bottom-2 right-2 bg-black bg-opacity-60 text-white text-xs px-2 py-0.5 rounded">
+                        VIDEO
+                      </span>
+                    </div>
+                  ) : item.media_type === 'document' ? (
+                    <div className="w-full h-40 bg-red-50 flex flex-col items-center justify-center">
+                      <FileText className="h-12 w-12 text-red-400" />
+                      <span className="text-xs text-red-500 mt-1 font-medium">
+                        {item.mime_type === 'application/pdf' ? 'PDF' : 'DOC'}
+                      </span>
+                    </div>
+                  ) : (
+                    <img
+                      src={api.getMediaUrl(item.id)}
+                      alt={item.title}
+                      className="w-full h-40 object-cover"
+                      loading="lazy"
+                    />
+                  )}
+
+                  {/* Info area */}
                   <div className="p-3">
-                    <p className="font-medium text-sm truncate" title={img.title}>{img.title}</p>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                        item.media_type === 'video' ? 'bg-blue-100 text-blue-700' :
+                        item.media_type === 'document' ? 'bg-red-100 text-red-700' :
+                        'bg-green-100 text-green-700'
+                      }`}>
+                        {getMediaTypeLabel(item.media_type)}
+                      </span>
+                    </div>
+                    <p className="font-medium text-sm truncate" title={item.title}>{item.title}</p>
                     <p className="text-xs text-gray-500 mt-0.5">
-                      {CATEGORIES.find(c => c.value === img.category)?.label || img.category}
+                      {CATEGORIES.find(c => c.value === item.category)?.label || item.category}
                     </p>
-                    {img.description && (
-                      <p className="text-xs text-gray-400 mt-1 truncate" title={img.description}>{img.description}</p>
+                    {item.description && (
+                      <p className="text-xs text-gray-400 mt-1 truncate" title={item.description}>{item.description}</p>
                     )}
                     <div className="flex items-center justify-between mt-2">
                       <span className="text-xs text-gray-400">
-                        ID: {img.id}
+                        ID: {item.id}
                       </span>
                       <button
-                        onClick={() => handleDelete(img.id, img.title)}
+                        onClick={() => handleDelete(item.id, item.title)}
                         className="text-red-400 hover:text-red-600 transition-colors"
-                        title="Eliminar imagen"
+                        title="Eliminar"
                       >
                         <Trash2 className="h-4 w-4" />
                       </button>
@@ -328,4 +394,4 @@ function ImageGallery() {
   );
 }
 
-export default ImageGallery;
+export default MediaGallery;

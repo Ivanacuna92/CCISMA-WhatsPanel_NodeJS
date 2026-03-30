@@ -44,7 +44,13 @@ function CampaignList({ campaigns, onSelectCampaign, onRefresh }) {
         const badge = badges[status] || badges.pending;
 
         return (
-            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${badge.bg} ${badge.text}`}>
+            <span className={`px-3 py-1 rounded-full text-xs font-semibold ${badge.bg} ${badge.text} flex items-center`}>
+                {status === 'running' && (
+                    <span className="relative flex h-2 w-2 mr-1.5">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                    </span>
+                )}
                 {badge.label}
             </span>
         );

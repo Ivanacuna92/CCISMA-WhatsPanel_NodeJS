@@ -8,6 +8,7 @@ class ARIManager extends EventEmitter {
         this.client = null;
         this.connected = false;
         this.activeCalls = new Map(); // Map de llamadas activas
+        this.pendingCalls = new Map(); // Map de channelId -> phoneNumber para llamadas en progreso
     }
 
     async connect() {
@@ -37,9 +38,16 @@ class ARIManager extends EventEmitter {
 
             this.client.on('ChannelDestroyed', (event, channel) => {
                 console.log(`📴 Canal destruido: ${channel.id}`);
+                // Buscar el phoneNumber asociado a este canal
+                const phoneNumber = this.pendingCalls.get(channel.id);
+                if (phoneNumber) {
+                    this.pendingCalls.delete(channel.id);
+                    console.log(`📴 Llamada fallida para: ${phoneNumber}`);
+                }
                 // Emitir evento para que campaignManager maneje la limpieza
                 this.emit('callFailed', {
                     channelId: channel.id,
+                    phoneNumber: phoneNumber || null,
                     reason: 'destroyed'
                 });
             });
@@ -49,8 +57,13 @@ class ARIManager extends EventEmitter {
                 console.log(`📞 Estado canal ${channel.id}: ${channel.state}`);
                 // Si el canal pasa a "busy" o similar, la llamada falló
                 if (['busy', 'congestion', 'noanswer'].includes(channel.state)) {
+                    const phoneNumber = this.pendingCalls.get(channel.id);
+                    if (phoneNumber) {
+                        this.pendingCalls.delete(channel.id);
+                    }
                     this.emit('callFailed', {
                         channelId: channel.id,
+                        phoneNumber: phoneNumber || null,
                         reason: channel.state
                     });
                 }
@@ -85,11 +98,18 @@ class ARIManager extends EventEmitter {
                 timeout: 30
             });
 
+            // Guardar relación channelId -> phoneNumber para tracking
+            if (channel.id) {
+                this.pendingCalls.set(channel.id, phoneNumber);
+                console.log(`📋 Registrada llamada pendiente: ${channel.id} -> ${phoneNumber}`);
+            }
+
             console.log(`✅ Llamada ARI originada a ${phoneNumber}`);
 
             return {
                 success: true,
-                phoneNumber: phoneNumber
+                phoneNumber: phoneNumber,
+                channelId: channel.id
             };
 
         } catch (error) {
@@ -106,6 +126,9 @@ class ARIManager extends EventEmitter {
         // Obtener el número de teléfono de los argumentos de Stasis
         const phoneNumber = event.args[0] || 'unknown';
         console.log(`📱 Número de teléfono: ${phoneNumber}`);
+
+        // Limpiar de pendingCalls ya que la llamada fue contestada
+        this.pendingCalls.delete(channel.id);
 
         try {
             // Contestar el canal
@@ -165,8 +188,19 @@ class ARIManager extends EventEmitter {
         this.activeCalls.delete(channel.id);
     }
 
+    // Verificar si un bridge todavía existe/está activo
+    isBridgeActive(bridgeId) {
+        return Array.from(this.activeCalls.values()).some(c => c.bridge?.id === bridgeId);
+    }
+
     async playAudio(bridgeId, audioPath, channelId = null) {
         try {
+            // Verificar si el bridge sigue activo (usuario no colgó)
+            if (!this.isBridgeActive(bridgeId)) {
+                console.log(`📴 Bridge ${bridgeId} ya no existe (usuario colgó)`);
+                return false;
+            }
+
             // Quitar extensión del path
             const soundPath = audioPath.replace(/\.(wav|ulaw|alaw|gsm|sln16|sln|mp3)$/i, '');
             console.log(`🔊 Reproduciendo: ${soundPath}`);
@@ -196,13 +230,24 @@ class ARIManager extends EventEmitter {
 
             return true;
         } catch (error) {
-            console.error('❌ Error reproduciendo:', error.message);
+            // No mostrar como error si es porque el canal/bridge ya no existe
+            if (error.message?.includes('not found') || error.message?.includes('not in Stasis')) {
+                console.log(`📴 Llamada terminada (usuario colgó): ${error.message}`);
+            } else {
+                console.error('❌ Error reproduciendo:', error.message);
+            }
             return false;
         }
     }
 
     async recordAudioFromBridge(bridgeId, recordingName, maxDuration = 8) {
         try {
+            // Verificar si el bridge sigue activo (usuario no colgó)
+            if (!this.isBridgeActive(bridgeId)) {
+                console.log(`📴 Bridge ${bridgeId} ya no existe (usuario colgó)`);
+                return null;
+            }
+
             console.log(`🎤 Grabando audio del bridge ${bridgeId}`);
 
             // Solo pasar el nombre del archivo, sin path ni extensión
@@ -259,8 +304,12 @@ class ARIManager extends EventEmitter {
             return `/var/spool/asterisk/recording/${cleanName}.wav`;
 
         } catch (error) {
-            console.error('❌ Error grabando audio:', error);
-            console.error('Detalles del error:', error.message, error.stack);
+            // No mostrar como error si es porque el canal/bridge ya no existe
+            if (error.message?.includes('not found') || error.message?.includes('not in Stasis')) {
+                console.log(`📴 Llamada terminada durante grabación (usuario colgó)`);
+            } else {
+                console.error('❌ Error grabando audio:', error.message);
+            }
             return null;
         }
     }
@@ -272,7 +321,12 @@ class ARIManager extends EventEmitter {
             await channel.hangup();
             console.log(`📴 Canal colgado: ${channelId}`);
         } catch (error) {
-            console.error('❌ Error colgando canal:', error);
+            // No mostrar error si el canal ya no existe (usuario ya colgó)
+            if (error.message?.includes('not found') || error.message?.includes('not in Stasis')) {
+                console.log(`📴 Canal ${channelId} ya no existe (usuario ya colgó)`);
+            } else {
+                console.error('❌ Error colgando canal:', error.message);
+            }
         }
     }
 

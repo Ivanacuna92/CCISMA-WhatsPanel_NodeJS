@@ -60,7 +60,7 @@ function Header({ currentView, onViewChange, user, onLogout }) {
               }`}
               onClick={() => onViewChange('gallery')}
             >
-              Galeria
+              Medios
             </button>
           )}
           {user?.role === 'admin' && (

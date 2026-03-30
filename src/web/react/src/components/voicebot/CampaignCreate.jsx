@@ -53,19 +53,32 @@ function CampaignCreate({ onCampaignCreated }) {
 
         try {
             const result = await voicebotApi.createCampaign(campaignName, file);
-            setStatus({
-                type: 'success',
-                message: `Campaña creada exitosamente. ${result.contactsAdded} contactos agregados.`
-            });
+
+            // Verificar si hay contactos rechazados
+            if (result.rejectedContacts && result.rejectedContacts.length > 0) {
+                setStatus({
+                    type: 'warning',
+                    message: `Campaña creada con ${result.contactsAdded} contactos.`,
+                    rejectedContacts: result.rejectedContacts
+                });
+            } else {
+                setStatus({
+                    type: 'success',
+                    message: `Campaña creada exitosamente. ${result.contactsAdded} contactos agregados.`
+                });
+            }
 
             // Resetear formulario
             setCampaignName('');
             setFile(null);
 
-            // Notificar al padre
-            setTimeout(() => {
-                onCampaignCreated();
-            }, 1500);
+            // Solo redirigir automáticamente si NO hay contactos rechazados
+            if (!result.rejectedContacts || result.rejectedContacts.length === 0) {
+                setTimeout(() => {
+                    onCampaignCreated();
+                }, 1500);
+            }
+            // Si hay rechazados, el usuario debe dar clic en el botón para continuar
         } catch (error) {
             console.error('Error creando campaña:', error);
             setStatus({
@@ -176,14 +189,46 @@ function CampaignCreate({ onCampaignCreated }) {
                     {/* Estado */}
                     {status && (
                         <div className={`mb-6 p-4 rounded-lg ${
-                            status.type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                            status.type === 'success' ? 'bg-green-100 text-green-700' :
+                            status.type === 'warning' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-red-100 text-red-700'
                         }`}>
                             <div className="flex items-start">
                                 {status.type === 'success' ?
                                     <CheckCircle className="h-5 w-5 mr-2 flex-shrink-0 mt-0.5" /> :
                                     <AlertCircle className="h-5 w-5 mr-2 flex-shrink-0 mt-0.5" />
                                 }
-                                <p className="text-sm">{status.message}</p>
+                                <div className="flex-1">
+                                    <p className="text-sm font-medium">{status.message}</p>
+
+                                    {/* Mostrar contactos rechazados */}
+                                    {status.rejectedContacts && status.rejectedContacts.length > 0 && (
+                                        <div className="mt-3">
+                                            <p className="text-sm font-semibold mb-2">
+                                                Contactos rechazados por datos incompletos:
+                                            </p>
+                                            <ul className="text-sm space-y-1 max-h-40 overflow-y-auto">
+                                                {status.rejectedContacts.map((contact, index) => (
+                                                    <li key={index} className="bg-yellow-50 p-2 rounded border border-yellow-200">
+                                                        <span className="font-medium">{contact.name}</span>
+                                                        {contact.phone && <span className="text-yellow-600"> ({contact.phone})</span>}
+                                                        <br />
+                                                        <span className="text-xs text-yellow-700">
+                                                            Faltan: {contact.missingFields.join(', ')}
+                                                        </span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                            <button
+                                                type="button"
+                                                onClick={onCampaignCreated}
+                                                className="mt-4 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 text-sm font-medium"
+                                            >
+                                                Entendido, ir al listado de campañas
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
                     )}
